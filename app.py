@@ -65,17 +65,19 @@ class UserRequirement:
         self.categories = categories
 
 class RestaurantPackage:
-    def __init__(self, id: str, name: str, categories: Dict[str, Category], price: float, rating: float):
+    def __init__(self, id: str, name: str, categories: Dict[str, Category], price: float, rating: float, package_id: str = ""):
         self.id = id
         self.name = name
         self.categories = categories
         self.price = price
         self.rating = rating
+        self.package_id = package_id
+        
 
 class MatchResult:
     def __init__(self, restaurant_id: str, restaurant_name: str, 
                  overall_match: float, category_matches: Dict[str, float],
-                 unmet_requirements: List[Dict[str, Any]], price: float, rating: float):
+                 unmet_requirements: List[Dict[str, Any]], price: float, rating: float, package_id: str = ""):
         self.restaurant_id = restaurant_id  
         self.restaurant_name = restaurant_name
         self.overall_match = overall_match
@@ -83,6 +85,7 @@ class MatchResult:
         self.unmet_requirements = unmet_requirements
         self.price = price
         self.rating = rating
+        self.package_id = package_id
     
     def to_dict(self):
         """Convert MatchResult to dictionary for JSON serialization"""
@@ -94,7 +97,8 @@ class MatchResult:
             "category_matches": {k: round(v * 100, 2) for k, v in self.category_matches.items()}, 
             "unmet_requirements": self.unmet_requirements,
             "price": self.price,
-            "rating": self.rating
+            "rating": self.rating,
+            "package_id": self.package_id  # Include package_id in the dictionary
         }
 
 class OptimizedRestaurantMatcher:
@@ -207,7 +211,8 @@ class OptimizedRestaurantMatcher:
                 category_matches=category_matches,
                 unmet_requirements=unmet_requirements,
                 price=restaurant.price,
-                rating=restaurant.rating
+                rating=restaurant.rating,
+                package_id=restaurant.package_id
             )
             
             all_matches.append((overall_match, restaurant.id, match_result))
@@ -465,6 +470,7 @@ def adapt_restaurant_data_updated(api_response):
             "name": variant.get("name", ""),
             "price": float(variant.get("cost", 0.0)),
             "rating": 0.0,  
+            "package_id": variant.get("packageId", ""),  # Add packageId field
             "categories": {}
         }
         
@@ -566,7 +572,8 @@ def parse_restaurant_packages(restaurant_data):
             name=rest_data.get("name", ""),
             categories=categories,
             price=float(rest_data.get("price", 0.0)),
-            rating=float(rest_data.get("rating", 0.0))
+            rating=float(rest_data.get("rating", 0.0)),
+            package_id=rest_data.get("package_id", "")  # Add package_id parameter
         )
         
         restaurant_packages.append(restaurant)
@@ -741,7 +748,8 @@ def match_restaurants_integrated():
                 'variant_name': result.restaurant_name,
                 'match_percentage': round(result.overall_match * 100, 2),
                 'price': result.price,
-                'unmet_requirements': result.unmet_requirements
+                'unmet_requirements': result.unmet_requirements,
+                'package_id': result.package_id
             })
         
         return jsonify({
@@ -749,6 +757,7 @@ def match_restaurants_integrated():
             'matches': simplified_results,
             'total_variants': len(restaurant_packages),
             'matched_variants': len(simplified_results)
+            
         })
     
     except Exception as e:
