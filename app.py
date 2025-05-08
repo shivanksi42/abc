@@ -705,7 +705,7 @@ def match_restaurants_integrated():
             })
 
         try:
-            user_requirements_data = fetch_user_requirements(token)
+            user_requirements_data = fetch_user_requirements(token, job_id)
             print("DEBUG - User requirements response type:", type(user_requirements_data))
             if isinstance(user_requirements_data, dict):
                 print("DEBUG - User requirements keys:", user_requirements_data.keys())
