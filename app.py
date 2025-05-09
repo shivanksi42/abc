@@ -678,6 +678,7 @@ def match_restaurants_integrated():
     """
     Integrated API endpoint that fetches data from backend APIs 
     and performs matching with updated parser functions
+    Now uses heapq for more efficient processing of best matches
     """
     try:
         data = request.json
@@ -686,6 +687,7 @@ def match_restaurants_integrated():
         job_id = data.get('job_id', None)
         threshold = data.get('threshold', 0.75)
         
+        # Add maxPerson to filter_data if provided
         if 'maxPerson' in data:
             filter_data['maxPerson'] = data.get('maxPerson')
             
@@ -710,7 +712,7 @@ def match_restaurants_integrated():
                 'matches': [],
                 'total_restaurants': 0,
                 'matched_restaurants': 0,
-                'venue_matches': [] 
+                'venue_matches': []
             })
         
         adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
@@ -721,10 +723,11 @@ def match_restaurants_integrated():
                 'matches': [],
                 'total_restaurants': 0, 
                 'matched_restaurants': 0,
-                'venue_matches': []  
+                'venue_matches': []
             })
 
         try:
+            # Call fetch_user_requirements without token
             user_requirements_data = fetch_user_requirements(job_id)
             print("DEBUG - User requirements response type:", type(user_requirements_data))
             if isinstance(user_requirements_data, dict):
@@ -752,37 +755,60 @@ def match_restaurants_integrated():
         matcher = OptimizedRestaurantMatcher(threshold=threshold)
         match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
         
+        # Use heapq to efficiently track the best matches by venue
+        venue_heaps = {}
         simplified_results = []
         
-        venue_best_matches = {}
-        
         for result in match_results:
-            simplified_results.append({
+            match_percentage = round(result.overall_match * 100, 2)
+            venue_id = result.venue_id
+            
+            simplified_result = {
                 'variant_id': result.restaurant_id,  
                 'variant_name': result.restaurant_name,
-                'match_percentage': round(result.overall_match * 100, 2),
+                'match_percentage': match_percentage,
                 'price': result.price,
                 'unmet_requirements': result.unmet_requirements,
                 'package_id': result.package_id,
-                'venue_id': result.venue_id 
-            })
+                'venue_id': venue_id
+            }
             
-            venue_id = result.venue_id
+            simplified_results.append(simplified_result)
+            
+            # For each venue, maintain a max heap of match percentages
+            # We use negative match_percentage because heapq is a min-heap
             if venue_id:
-                match_percentage = round(result.overall_match * 100, 2)
+                if venue_id not in venue_heaps:
+                    venue_heaps[venue_id] = []
                 
-                if venue_id not in venue_best_matches or match_percentage > venue_best_matches[venue_id]['match_percentage']:
-                    venue_best_matches[venue_id] = {
-                        'venue_id': venue_id,
-                        'match_percentage': match_percentage,
-                    }
+                # Push this result into the heap for its venue
+                heapq.heappush(venue_heaps[venue_id], (-match_percentage, simplified_result))
         
-        venue_matches = list(venue_best_matches.values())
+        # Extract the best match for each venue (highest percentage = lowest negative value in heap)
+        venue_matches = []
+        for venue_id, heap in venue_heaps.items():
+            if heap:
+                # Get the best match (top of heap)
+                best_match = heapq.heappop(heap)
+                
+                # Extract the actual match percentage (removing the negative)
+                match_percentage = -best_match[0]
+                
+                venue_matches.append({
+                    'venue_id': venue_id,
+                    'match_percentage': match_percentage,
+                    # Optional: include other details from the best-matching variant
+                    'best_variant_id': best_match[1]['variant_id'],
+                    'best_variant_name': best_match[1]['variant_name']
+                })
+        
+        # Sort venue matches by match percentage (highest first)
+        venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
         
         return jsonify({
             'status': 'success',
             'matches': simplified_results,
-            'venue_matches': venue_matches, 
+            'venue_matches': venue_matches,
             'total_variants': len(restaurant_packages),
             'matched_variants': len(simplified_results)
         })
