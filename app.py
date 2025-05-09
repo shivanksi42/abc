@@ -465,7 +465,7 @@ def adapt_restaurant_data_updated(api_response):
     """
     Adapts the API response format to match what the restaurant matcher expects
     Handles both dictionary and list formats for availableMenuCount
-    Now also extracts and stores venueId
+    Now also extracts and stores venueId which is directly in the variant object
     
     Debug version with more logging
     """
@@ -478,43 +478,58 @@ def adapt_restaurant_data_updated(api_response):
     logger.info(f"Processing {len(api_response.get('variants', []))} variants")
     
     for variant in api_response.get('variants', []):
+        # Check if variant is a dictionary before processing
         if not isinstance(variant, dict):
             logger.warning(f"Skipping variant because it's not a dictionary: {type(variant)}")
             continue
-        variant_data = variant  
-        if hasattr(variant, '_doc') and isinstance(variant._doc, dict):
-            variant_data = variant._doc
-        elif "$__" in variant and "_doc" in variant:
-            variant_data = variant.get("_doc", variant)
+            
+        # Get venueId before potentially modifying the variant object
+        venue_id = variant.get("venueId", "")
+        logger.debug(f"Found venue_id: {venue_id} for variant")
         
-        venue_id = variant_data.get("venueId", "")
-        logger.info(f"Extracted venue_id: {venue_id}")
+        # Create a working copy of the variant that we might modify
+        working_variant = variant
+        
+        # Handle Mongoose document objects which might have _doc property
+        if hasattr(working_variant, '_doc') and isinstance(working_variant._doc, dict):
+            working_variant = working_variant._doc
+        elif "$__" in working_variant and "_doc" in working_variant:
+            working_variant = working_variant.get("_doc", working_variant)
+        
         restaurant = {
-            "id": variant_data.get("_id", ""),
-            "name": variant_data.get("name", ""),
-            "price": float(variant_data.get("cost", 0.0)),
+            "id": working_variant.get("_id", ""),
+            "name": working_variant.get("name", ""),
+            "price": float(working_variant.get("cost", 0.0)),
             "rating": 0.0,  
-            "package_id": variant_data.get("packageId", ""),
-            "venue_id": venue_id,  
+            "package_id": working_variant.get("packageId", ""),
+            "venue_id": venue_id,  # Use the venueId we extracted earlier
             "categories": {}
         }
         
         logger.debug(f"Processing variant: {variant.get('name', 'Unknown')} (ID: {variant.get('_id', 'Unknown')})")
         
+        # Initialize as False to track if we found any menu items
         found_menu_items = False
         
+        # Check for availableMenuCount in the variant
         if "availableMenuCount" in variant:
+            # Log the type of availableMenuCount
             logger.debug(f"availableMenuCount type: {type(variant.get('availableMenuCount'))}")
             
+            # Handle both list and dictionary formats
             menu_sections = variant.get("availableMenuCount", [])
             
             if isinstance(menu_sections, dict):
+                # If it's a dictionary, convert to a list format with a single item
                 menu_sections = [{"name": "Menu Items", "availableMenuCount": menu_sections}]
             
+            # Process each menu section
             for menu_section in menu_sections:
                 if isinstance(menu_section, dict):
+                    # Get category name
                     cat_name = menu_section.get("name", "Uncategorized")
                     
+                    # Initialize category if needed
                     if cat_name not in restaurant["categories"]:
                         restaurant["categories"][cat_name] = {"cuisines": {}}
                     
@@ -639,6 +654,97 @@ def adapt_restaurant_data_updated(api_response):
     
     logger.info(f"Successfully adapted {len(adapted_data)} restaurants out of {len(api_response.get('variants', []))} variants")
     return adapted_data
+
+def debug_variant_structure(variant, indent=0):
+    """
+    Recursively print the structure of a variant to help diagnose issues
+    
+    Args:
+        variant: The variant object to inspect
+        indent: Indentation level for printing
+    """
+    prefix = ' ' * indent
+    
+    if isinstance(variant, dict):
+        logger.debug(f"{prefix}Dict with keys: {', '.join(variant.keys())}")
+        # Print some important keys with their types
+        for key in ['_id', 'name', 'venueId', 'cost', 'packageId', 'availableMenuCount']:
+            if key in variant:
+                value = variant[key]
+                logger.debug(f"{prefix}- {key}: {type(value).__name__}")
+                
+                # For nested structures, go deeper
+                if key == 'availableMenuCount' and (isinstance(value, dict) or isinstance(value, list)):
+                    if isinstance(value, dict):
+                        logger.debug(f"{prefix}  availableMenuCount is a dict with keys: {', '.join(value.keys())}")
+                    elif isinstance(value, list) and len(value) > 0:
+                        logger.debug(f"{prefix}  availableMenuCount is a list with {len(value)} items")
+                        if len(value) > 0 and isinstance(value[0], dict):
+                            logger.debug(f"{prefix}  First item keys: {', '.join(value[0].keys())}")
+        
+        # If _doc exists, drill into it
+        if '_doc' in variant:
+            logger.debug(f"{prefix}Found _doc key, exploring:")
+            debug_variant_structure(variant['_doc'], indent + 2)
+    elif hasattr(variant, '_doc'):
+        logger.debug(f"{prefix}Object with _doc attribute")
+        debug_variant_structure(variant._doc, indent + 2)
+    elif isinstance(variant, list):
+        logger.debug(f"{prefix}List with {len(variant)} items")
+        if len(variant) > 0:
+            logger.debug(f"{prefix}First item is a {type(variant[0]).__name__}")
+            if isinstance(variant[0], dict) or hasattr(variant[0], '_doc'):
+                debug_variant_structure(variant[0], indent + 2)
+    else:
+        logger.debug(f"{prefix}Other type: {type(variant).__name__}")
+
+def add_debugging_to_match_restaurants():
+    """
+    Update the match_restaurants_integrated function to add debugging
+    This can be called at the start of the function
+    """
+    try:
+        data = request.json
+        
+        logger.info(f"Request data keys: {', '.join(data.keys())}")
+        
+        # Then, fetch the filtered variants
+        filter_data = data.get('filter_data', {})
+        restaurant_packages_data = fetch_filtered_variants(filter_data)
+        
+        # Now debug the response structure
+        logger.debug(f"API Response keys: {', '.join(restaurant_packages_data.keys())}")
+        
+        # If there are variants, inspect the first one
+        if 'variants' in restaurant_packages_data and restaurant_packages_data['variants']:
+            logger.debug("Inspecting first variant structure:")
+            first_variant = restaurant_packages_data['variants'][0]
+            debug_variant_structure(first_variant)
+            
+            # Check specifically for venueId
+            if isinstance(first_variant, dict):
+                venue_id = first_variant.get("venueId", "NOT FOUND")
+                logger.debug(f"venueId directly in variant: {venue_id}")
+                
+            if hasattr(first_variant, "_doc"):
+                doc = first_variant._doc
+                if isinstance(doc, dict):
+                    doc_venue_id = doc.get("venueId", "NOT FOUND")
+                    logger.debug(f"venueId in _doc: {doc_venue_id}")
+            
+            if isinstance(first_variant, dict) and "_doc" in first_variant:
+                doc = first_variant["_doc"]
+                if isinstance(doc, dict):
+                    doc_venue_id = doc.get("venueId", "NOT FOUND")
+                    logger.debug(f"venueId in ['_doc']: {doc_venue_id}")
+    
+    except Exception as e:
+        logger.error(f"Error in debugging function: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        
+
 
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
     """Helper function to add a menu item to a restaurant structure"""
@@ -800,6 +906,7 @@ def match_restaurants_integrated():
     and performs matching with updated parser functions
     Now uses heapq for more efficient processing of best matches
     """
+    add_debugging_to_match_restaurants()
     try:
         data = request.json
         
@@ -807,7 +914,6 @@ def match_restaurants_integrated():
         job_id = data.get('job_id', None)
         threshold = data.get('threshold', 0.75)
         
-        # Add maxPerson to filter_data if provided
         if 'maxPerson' in data:
             filter_data['maxPerson'] = data.get('maxPerson')
             
@@ -899,35 +1005,27 @@ def match_restaurants_integrated():
             }
             
             simplified_results.append(simplified_result)
-            
-            # For each venue, maintain a max heap of match percentages
-            # We use negative match_percentage because heapq is a min-heap
+
             if venue_id:
                 if venue_id not in venue_heaps:
                     venue_heaps[venue_id] = []
                 
-                # Push this result into the heap for its venue
                 heapq.heappush(venue_heaps[venue_id], (-match_percentage, simplified_result))
         
-        # Extract the best match for each venue (highest percentage = lowest negative value in heap)
         venue_matches = []
         for venue_id, heap in venue_heaps.items():
             if heap:
-                # Get the best match (top of heap)
                 best_match = heapq.heappop(heap)
                 
-                # Extract the actual match percentage (removing the negative)
                 match_percentage = -best_match[0]
                 
                 venue_matches.append({
                     'venue_id': venue_id,
                     'match_percentage': match_percentage,
-                    # Optional: include other details from the best-matching variant
                     'best_variant_id': best_match[1]['variant_id'],
                     'best_variant_name': best_match[1]['variant_name']
                 })
         
-        # Sort venue matches by match percentage (highest first)
         venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
         
         return jsonify({
