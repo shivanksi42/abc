@@ -937,8 +937,6 @@ def match_restaurants_integrated():
             sample_variant = restaurant_packages_data['variants'][0]
             logger.info(f"Sample variant keys: {list(sample_variant.keys() if isinstance(sample_variant, dict) else ['Not a dict'])}")
         
-        adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
-        logger.info(f"Adapted {len(adapted_restaurant_data)} restaurants")
         if not restaurant_packages_data or not restaurant_packages_data.get('variants'):
             return jsonify({
                 'status': 'success',
@@ -1010,8 +1008,8 @@ def match_restaurants_integrated():
             if venue_id:
                 if venue_id not in venue_heaps:
                     venue_heaps[venue_id] = []
-         
-                heapq.heappush(venue_heaps[venue_id], (-match_percentage, result.restaurant_id, simplified_result))
+                
+                heapq.heappush(venue_heaps[venue_id], (-match_percentage, simplified_result))
         
         venue_matches = []
         for venue_id, heap in venue_heaps.items():
@@ -1023,8 +1021,8 @@ def match_restaurants_integrated():
                 venue_matches.append({
                     'venue_id': venue_id,
                     'match_percentage': match_percentage,
-                    'best_variant_id': best_match[2]['variant_id'],
-                    'best_variant_name': best_match[2]['variant_name']
+                    'best_variant_id': best_match[1]['variant_id'],
+                    'best_variant_name': best_match[1]['variant_name']
                 })
         
         venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
@@ -1044,7 +1042,8 @@ def match_restaurants_integrated():
             'status': 'error',
             'message': str(e)
         }), 500
- 
+        
+         
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
