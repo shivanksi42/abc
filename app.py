@@ -465,8 +465,6 @@ def adapt_restaurant_data_updated(api_response):
     Adapts the API response format to match what the restaurant matcher expects
     Handles both dictionary and list formats for availableMenuCount
     Now also extracts and stores venueId
-    
-    Debug version with more logging
     """
     adapted_data = []
     
@@ -474,20 +472,7 @@ def adapt_restaurant_data_updated(api_response):
         logger.warning("API response is not a dictionary")
         return adapted_data
     
-    logger.info(f"Processing {len(api_response.get('variants', []))} variants")
-    
     for variant in api_response.get('variants', []):
-        # Check if variant is a dictionary before processing
-        if not isinstance(variant, dict):
-            logger.warning(f"Skipping variant because it's not a dictionary: {type(variant)}")
-            continue
-            
-        # Handle Mongoose document objects which might have _doc property
-        if hasattr(variant, '_doc') and isinstance(variant._doc, dict):
-            variant = variant._doc
-        elif "$__" in variant and "_doc" in variant:
-            variant = variant.get("_doc", variant)
-        
         restaurant = {
             "id": variant.get("_id", ""),
             "name": variant.get("name", ""),
@@ -498,154 +483,45 @@ def adapt_restaurant_data_updated(api_response):
             "categories": {}
         }
         
-        logger.debug(f"Processing variant: {variant.get('name', 'Unknown')} (ID: {variant.get('_id', 'Unknown')})")
-        
-        # Initialize as False to track if we found any menu items
         found_menu_items = False
         
-        # Check for availableMenuCount in the variant
         if "availableMenuCount" in variant:
-            # Log the type of availableMenuCount
-            logger.debug(f"availableMenuCount type: {type(variant.get('availableMenuCount'))}")
-            
-            # Handle both list and dictionary formats
-            menu_sections = variant.get("availableMenuCount", [])
-            
-            if isinstance(menu_sections, dict):
-                # If it's a dictionary, convert to a list format with a single item
-                menu_sections = [{"name": "Menu Items", "availableMenuCount": menu_sections}]
-            
-            # Process each menu section
-            for menu_section in menu_sections:
-                if isinstance(menu_section, dict):
-                    # Get category name
+            for menu_section in variant.get("availableMenuCount", []):
+                if isinstance(menu_section, dict) and "name" in menu_section and "subcategoriesByCuisine" in menu_section:
                     cat_name = menu_section.get("name", "Uncategorized")
                     
-                    # Initialize category if needed
                     if cat_name not in restaurant["categories"]:
                         restaurant["categories"][cat_name] = {"cuisines": {}}
                     
-                    # Check for subcategoriesByCuisine
-                    if "subcategoriesByCuisine" in menu_section:
-                        for cuisine_name, subcategory_list in menu_section.get("subcategoriesByCuisine", {}).items():
-                            # Initialize cuisine if needed
-                            if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
-                                restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
-                                    "subcategories": {},
-                                    "contains_egg": False
-                                }
-                            
-                            # Process each subcategory
-                            for subcategory_data in subcategory_list:
-                                subcat_name = subcategory_data.get("name", "General")
-                                
-                                # Initialize subcategory if needed
-                                if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
-                                    restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
-                                        "items": {}
-                                    }
-                                
-                                # Get count data - handle both formats
-                                count_data = subcategory_data.get("availableMenuCount", subcategory_data.get("count", {}))
-                                
-                                # Process counts
-                                if isinstance(count_data, dict):
-                                    for item_type, count in count_data.items():
-                                        if count > 0:
-                                            restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
-                                            found_menu_items = True
-                                            
-                                            # Check for eggs
-                                            if item_type == "Egg" and count > 0:
-                                                restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
-                                elif isinstance(count_data, list):
-                                    # Handle list format
-                                    for item in count_data:
-                                        if isinstance(item, dict):
-                                            item_type = item.get("name", "Unknown")
-                                            count = item.get("count", 0)
-                                            if count > 0:
-                                                restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
-                                                found_menu_items = True
-                                                
-                                                # Check for eggs
-                                                if item_type == "Egg" and count > 0:
-                                                    restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
-                    # Check for direct count field (simplified format)
-                    elif "availableMenuCount" in menu_section or "count" in menu_section:
-                        count_data = menu_section.get("availableMenuCount", menu_section.get("count", {}))
-                        cuisine_name = "General"
-                        subcat_name = "General"
-                        
-                        # Initialize necessary structures
+                    for cuisine_name, subcategory_list in menu_section.get("subcategoriesByCuisine", {}).items():
                         if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
                             restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
                                 "subcategories": {},
                                 "contains_egg": False
                             }
-                            
-                        if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
-                            restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
-                                "items": {}
-                            }
                         
-                        # Process counts
-                        if isinstance(count_data, dict):
+                        for subcategory_data in subcategory_list:
+                            subcat_name = subcategory_data.get("name", "General")
+                            
+                            if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
+                                restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
+                                    "items": {}
+                                }
+                            
+                            count_data = subcategory_data.get("count", {})
                             for item_type, count in count_data.items():
                                 if count > 0:
                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
                                     found_menu_items = True
                                     
-                                    # Check for eggs
                                     if item_type == "Egg" and count > 0:
                                         restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
-                        elif isinstance(count_data, list):
-                            # Handle list format
-                            for item in count_data:
-                                if isinstance(item, dict):
-                                    item_type = item.get("name", "Unknown")
-                                    count = item.get("count", 0)
-                                    if count > 0:
-                                        restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
-                                        found_menu_items = True
-                                        
-                                        # Check for eggs
-                                        if item_type == "Egg" and count > 0:
-                                            restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
         
-        # If we found menu items, add the restaurant to our results
         if found_menu_items:
-            logger.debug(f"Added restaurant: {restaurant['name']} with menu items")
             adapted_data.append(restaurant)
-        else:
-            logger.warning(f"No menu items found for restaurant: {restaurant['name']}")
             
-            # As a fallback, if the restaurant has no menu items but has a name and ID,
-            # add it with a default menu item structure
-            if restaurant["name"] and restaurant["id"]:
-                cat_name = "Menu Items"
-                cuisine_name = "General"
-                subcat_name = "General"
-                
-                if cat_name not in restaurant["categories"]:
-                    restaurant["categories"][cat_name] = {"cuisines": {}}
-                
-                if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
-                    restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
-                        "subcategories": {},
-                        "contains_egg": False
-                    }
-                
-                if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
-                    restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
-                        "items": {"Default": 1}
-                    }
-                
-                logger.debug(f"Added restaurant: {restaurant['name']} with default menu item")
-                adapted_data.append(restaurant)
-    
-    logger.info(f"Successfully adapted {len(adapted_data)} restaurants out of {len(api_response.get('variants', []))} variants")
     return adapted_data
+
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
     """Helper function to add a menu item to a restaurant structure"""
     cat_name = "Menu Items"  
@@ -828,14 +704,7 @@ def match_restaurants_integrated():
             }), 400
         
         restaurant_packages_data = fetch_filtered_variants(filter_data)
-        logger.info(f"Raw restaurant data structure: {json.dumps({k: type(v).__name__ for k, v in restaurant_packages_data.items()})}")
     
-        if 'variants' in restaurant_packages_data and len(restaurant_packages_data['variants']) > 0:
-            sample_variant = restaurant_packages_data['variants'][0]
-            logger.info(f"Sample variant keys: {list(sample_variant.keys() if isinstance(sample_variant, dict) else ['Not a dict'])}")
-        
-        adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
-        logger.info(f"Adapted {len(adapted_restaurant_data)} restaurants")
         if not restaurant_packages_data or not restaurant_packages_data.get('variants'):
             return jsonify({
                 'status': 'success',
@@ -858,6 +727,7 @@ def match_restaurants_integrated():
             })
 
         try:
+            # Call fetch_user_requirements without token
             user_requirements_data = fetch_user_requirements(job_id)
             print("DEBUG - User requirements response type:", type(user_requirements_data))
             if isinstance(user_requirements_data, dict):
@@ -885,6 +755,7 @@ def match_restaurants_integrated():
         matcher = OptimizedRestaurantMatcher(threshold=threshold)
         match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
         
+        # Use heapq to efficiently track the best matches by venue
         venue_heaps = {}
         simplified_results = []
         
