@@ -824,14 +824,14 @@ def adapt_restaurant_data_updated(api_response):
                     "items": {}
                 }
             
-            default_items = {
-                "Veg": 10,
-                "Non-Veg": 10,
-                "Dessert": 5,
-                "Beverage": 5
-            }
+            # default_items = {
+            #     "Veg": 10,
+            #     "Non-Veg": 10,
+            #     "Dessert": 5,
+            #     "Beverage": 5
+            # }
             
-            restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"] = default_items
+            restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"] = {}
             found_menu_items = True
             
         if restaurant["name"] and restaurant["id"]:
