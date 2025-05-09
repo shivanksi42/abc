@@ -65,13 +65,14 @@ class UserRequirement:
         self.categories = categories
 
 class RestaurantPackage:
-    def __init__(self, id: str, name: str, categories: Dict[str, Category], price: float, rating: float, package_id: str = ""):
+    def __init__(self, id: str, name: str, categories: Dict[str, Category], price: float, rating: float, package_id: str = "", venue_id: str = ""):
         self.id = id
         self.name = name
         self.categories = categories
         self.price = price
         self.rating = rating
         self.package_id = package_id
+        self.venue_id = venue_id 
         
 
 class MatchResult:
@@ -477,51 +478,43 @@ def adapt_restaurant_data_updated(api_response):
     logger.info(f"Processing {len(api_response.get('variants', []))} variants")
     
     for variant in api_response.get('variants', []):
-        # Check if variant is a dictionary before processing
         if not isinstance(variant, dict):
             logger.warning(f"Skipping variant because it's not a dictionary: {type(variant)}")
             continue
-            
-        # Handle Mongoose document objects which might have _doc property
+        variant_data = variant  
         if hasattr(variant, '_doc') and isinstance(variant._doc, dict):
-            variant = variant._doc
+            variant_data = variant._doc
         elif "$__" in variant and "_doc" in variant:
-            variant = variant.get("_doc", variant)
+            variant_data = variant.get("_doc", variant)
         
+        venue_id = variant_data.get("venueId", "")
+        logger.info(f"Extracted venue_id: {venue_id}")
         restaurant = {
-            "id": variant.get("_id", ""),
-            "name": variant.get("name", ""),
-            "price": float(variant.get("cost", 0.0)),
+            "id": variant_data.get("_id", ""),
+            "name": variant_data.get("name", ""),
+            "price": float(variant_data.get("cost", 0.0)),
             "rating": 0.0,  
-            "package_id": variant.get("packageId", ""),
-            "venue_id": variant.get("venueId", ""),  # Extract venueId from the response
+            "package_id": variant_data.get("packageId", ""),
+            "venue_id": venue_id,  
             "categories": {}
         }
         
         logger.debug(f"Processing variant: {variant.get('name', 'Unknown')} (ID: {variant.get('_id', 'Unknown')})")
         
-        # Initialize as False to track if we found any menu items
         found_menu_items = False
         
-        # Check for availableMenuCount in the variant
         if "availableMenuCount" in variant:
-            # Log the type of availableMenuCount
             logger.debug(f"availableMenuCount type: {type(variant.get('availableMenuCount'))}")
             
-            # Handle both list and dictionary formats
             menu_sections = variant.get("availableMenuCount", [])
             
             if isinstance(menu_sections, dict):
-                # If it's a dictionary, convert to a list format with a single item
                 menu_sections = [{"name": "Menu Items", "availableMenuCount": menu_sections}]
             
-            # Process each menu section
             for menu_section in menu_sections:
                 if isinstance(menu_section, dict):
-                    # Get category name
                     cat_name = menu_section.get("name", "Uncategorized")
                     
-                    # Initialize category if needed
                     if cat_name not in restaurant["categories"]:
                         restaurant["categories"][cat_name] = {"cuisines": {}}
                     
@@ -646,6 +639,7 @@ def adapt_restaurant_data_updated(api_response):
     
     logger.info(f"Successfully adapted {len(adapted_data)} restaurants out of {len(api_response.get('variants', []))} variants")
     return adapted_data
+
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
     """Helper function to add a menu item to a restaurant structure"""
     cat_name = "Menu Items"  
@@ -710,7 +704,9 @@ def parse_restaurant_packages(restaurant_data):
             package_id=rest_data.get("package_id", "")
         )
         
-        setattr(restaurant, 'venue_id', rest_data.get("venue_id", ""))
+        venue_id = rest_data.get("venue_id", "")
+        setattr(restaurant, 'venue_id', venue_id)
+        logger.info(f"Setting venue_id for {restaurant.name}: {venue_id}")
         
         restaurant_packages.append(restaurant)
     
