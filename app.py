@@ -77,7 +77,8 @@ class RestaurantPackage:
 class MatchResult:
     def __init__(self, restaurant_id: str, restaurant_name: str, 
                  overall_match: float, category_matches: Dict[str, float],
-                 unmet_requirements: List[Dict[str, Any]], price: float, rating: float, package_id: str = ""):
+                 unmet_requirements: List[Dict[str, Any]], price: float, rating: float, 
+                 package_id: str = "", venue_id: str = ""):
         self.restaurant_id = restaurant_id  
         self.restaurant_name = restaurant_name
         self.overall_match = overall_match
@@ -86,6 +87,7 @@ class MatchResult:
         self.price = price
         self.rating = rating
         self.package_id = package_id
+        self.venue_id = venue_id  # Added venue_id
     
     def to_dict(self):
         """Convert MatchResult to dictionary for JSON serialization"""
@@ -98,7 +100,8 @@ class MatchResult:
             "unmet_requirements": self.unmet_requirements,
             "price": self.price,
             "rating": self.rating,
-            "package_id": self.package_id  # Include package_id in the dictionary
+            "package_id": self.package_id,
+            "venue_id": self.venue_id  # Include venue_id in the dictionary
         }
 
 class OptimizedRestaurantMatcher:
@@ -192,37 +195,41 @@ class OptimizedRestaurantMatcher:
         return overall_match, dict(category_matches), unmet_requirements
     
     def score_restaurants(self, user_req, restaurant_packages):
-        """Score and rank restaurant packages against user requirements"""
-        flat_user_req, total_user_items = self.flatten_requirements(user_req)
-  
-        all_matches = []
-        
-        for restaurant in restaurant_packages:
-
-            flat_restaurant = self.flatten_restaurant(restaurant)
+            """Score and rank restaurant packages against user requirements"""
+            flat_user_req, total_user_items = self.flatten_requirements(user_req)
+    
+            all_matches = []
             
-            overall_match, category_matches, unmet_requirements = self.calculate_match(
-                flat_user_req, flat_restaurant, total_user_items
-            )
-            match_result = MatchResult(
-                restaurant_id=restaurant.id,
-                restaurant_name=restaurant.name,
-                overall_match=overall_match,
-                category_matches=category_matches,
-                unmet_requirements=unmet_requirements,
-                price=restaurant.price,
-                rating=restaurant.rating,
-                package_id=restaurant.package_id
-            )
+            for restaurant in restaurant_packages:
+                flat_restaurant = self.flatten_restaurant(restaurant)
+                
+                overall_match, category_matches, unmet_requirements = self.calculate_match(
+                    flat_user_req, flat_restaurant, total_user_items
+                )
+                
+                # Get venue_id from the restaurant object
+                venue_id = getattr(restaurant, 'venue_id', "")
+                
+                match_result = MatchResult(
+                    restaurant_id=restaurant.id,
+                    restaurant_name=restaurant.name,
+                    overall_match=overall_match,
+                    category_matches=category_matches,
+                    unmet_requirements=unmet_requirements,
+                    price=restaurant.price,
+                    rating=restaurant.rating,
+                    package_id=restaurant.package_id,
+                    venue_id=venue_id  # Pass venue_id to the match result
+                )
+                
+                all_matches.append((overall_match, restaurant.id, match_result))
             
-            all_matches.append((overall_match, restaurant.id, match_result))
-        
-        results = []
-        sorted_matches = sorted(all_matches, key=lambda x: x[0], reverse=True)
-        for _, _, match_result in sorted_matches:
-            results.append(match_result)
-        
-        return results
+            results = []
+            sorted_matches = sorted(all_matches, key=lambda x: x[0], reverse=True)
+            for _, _, match_result in sorted_matches:
+                results.append(match_result)
+            
+            return results
 
 def parse_user_requirements(user_requirements_data, count_field="count"):
     """Convert API JSON data to UserRequirement object
@@ -457,6 +464,7 @@ def adapt_restaurant_data_updated(api_response):
     """
     Adapts the API response format to match what the restaurant matcher expects
     Handles both dictionary and list formats for availableMenuCount
+    Now also extracts and stores venueId
     """
     adapted_data = []
     
@@ -470,7 +478,8 @@ def adapt_restaurant_data_updated(api_response):
             "name": variant.get("name", ""),
             "price": float(variant.get("cost", 0.0)),
             "rating": 0.0,  
-            "package_id": variant.get("packageId", ""),  # Add packageId field
+            "package_id": variant.get("packageId", ""),
+            "venue_id": variant.get("venueId", ""),  # Extract venueId from the response
             "categories": {}
         }
         
@@ -512,6 +521,7 @@ def adapt_restaurant_data_updated(api_response):
             adapted_data.append(restaurant)
             
     return adapted_data
+
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
     """Helper function to add a menu item to a restaurant structure"""
     cat_name = "Menu Items"  
@@ -573,20 +583,29 @@ def parse_restaurant_packages(restaurant_data):
             categories=categories,
             price=float(rest_data.get("price", 0.0)),
             rating=float(rest_data.get("rating", 0.0)),
-            package_id=rest_data.get("package_id", "")  # Add package_id parameter
+            package_id=rest_data.get("package_id", "")
         )
+        
+        setattr(restaurant, 'venue_id', rest_data.get("venue_id", ""))
         
         restaurant_packages.append(restaurant)
     
     return restaurant_packages
+
 def fetch_filtered_variants(filter_data):
     """
     Fetch filtered restaurant variants from the backend API
+    Include maxPerson parameter if provided
     """
     try:
         url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
-        logger.info(f"Fetching filtered variants with data: {filter_data}")
         
+        if 'maxPerson' in filter_data:
+            logger.info(f"Fetching filtered variants with maxPerson: {filter_data['maxPerson']}")
+        else:
+            logger.info(f"Fetching filtered variants without maxPerson parameter")
+        
+        logger.info(f"Fetching filtered variants with data: {filter_data}")
         response = requests.post(url, json=filter_data)
         
         if response.status_code != 200:
@@ -604,8 +623,7 @@ def fetch_filtered_variants(filter_data):
         
     except Exception as e:
         logger.error(f"Error fetching filtered variants: {str(e)}")
-        raise
-    
+        raise    
 
 def debug_restaurant_data(restaurant_packages):
     """Helper function to debug restaurant data structure"""
@@ -625,12 +643,12 @@ def debug_restaurant_data(restaurant_packages):
 
 
 
-def fetch_user_requirements(token,job_id):
+def fetch_user_requirements(job_id):
     """
     Fetch user requirements/customizations from the backend API
+    Token is no longer required
     
     Args:
-        token: Authentication token
         job_id: ID of the job to fetch requirements for
         
     Returns:
@@ -640,11 +658,8 @@ def fetch_user_requirements(token,job_id):
         url = f"{BACKEND_BASE_URL}{USER_REQUIREMENTS_BASE_ENDPOINT}/{job_id}"
         logger.info(f"Fetching user requirements for job ID: {job_id}")
         
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-        
-        response = requests.get(url, headers=headers)
+        # No headers with token needed anymore
+        response = requests.get(url)
         
         if response.status_code != 200:
             logger.error(f"Failed to fetch user requirements: {response.text}")
@@ -668,20 +683,16 @@ def match_restaurants_integrated():
         data = request.json
         
         filter_data = data.get('filter_data', {})
-        token = data.get('token', None)
         job_id = data.get('job_id', None)
-        threshold = data.get('threshold', 0.75) 
+        threshold = data.get('threshold', 0.75)
         
+        if 'maxPerson' in data:
+            filter_data['maxPerson'] = data.get('maxPerson')
+            
         if not filter_data:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing filter_data in request'
-            }), 400
-            
-        if not token:
-            return jsonify({
-                'status': 'error',
-                'message': 'Missing token in request'
             }), 400
         
         if not job_id:
@@ -698,7 +709,8 @@ def match_restaurants_integrated():
                 'message': 'No restaurants found matching your criteria',
                 'matches': [],
                 'total_restaurants': 0,
-                'matched_restaurants': 0
+                'matched_restaurants': 0,
+                'venue_matches': [] 
             })
         
         adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
@@ -708,11 +720,12 @@ def match_restaurants_integrated():
                 'message': 'Could not adapt restaurant data',
                 'matches': [],
                 'total_restaurants': 0, 
-                'matched_restaurants': 0
+                'matched_restaurants': 0,
+                'venue_matches': []  
             })
 
         try:
-            user_requirements_data = fetch_user_requirements(token, job_id)
+            user_requirements_data = fetch_user_requirements(job_id)
             print("DEBUG - User requirements response type:", type(user_requirements_data))
             if isinstance(user_requirements_data, dict):
                 print("DEBUG - User requirements keys:", user_requirements_data.keys())
@@ -734,14 +747,15 @@ def match_restaurants_integrated():
                 'message': 'No valid user requirements found',
             }), 500
         
-        
         restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
         
-      
         matcher = OptimizedRestaurantMatcher(threshold=threshold)
         match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
         
         simplified_results = []
+        
+        venue_best_matches = {}
+        
         for result in match_results:
             simplified_results.append({
                 'variant_id': result.restaurant_id,  
@@ -749,15 +763,28 @@ def match_restaurants_integrated():
                 'match_percentage': round(result.overall_match * 100, 2),
                 'price': result.price,
                 'unmet_requirements': result.unmet_requirements,
-                'package_id': result.package_id
+                'package_id': result.package_id,
+                'venue_id': result.venue_id 
             })
+            
+            venue_id = result.venue_id
+            if venue_id:
+                match_percentage = round(result.overall_match * 100, 2)
+                
+                if venue_id not in venue_best_matches or match_percentage > venue_best_matches[venue_id]['match_percentage']:
+                    venue_best_matches[venue_id] = {
+                        'venue_id': venue_id,
+                        'match_percentage': match_percentage,
+                    }
+        
+        venue_matches = list(venue_best_matches.values())
         
         return jsonify({
             'status': 'success',
             'matches': simplified_results,
+            'venue_matches': venue_matches, 
             'total_variants': len(restaurant_packages),
             'matched_variants': len(simplified_results)
-            
         })
     
     except Exception as e:
@@ -767,7 +794,8 @@ def match_restaurants_integrated():
             'status': 'error',
             'message': str(e)
         }), 500
-        
+
+ 
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
