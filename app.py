@@ -812,6 +812,7 @@ def match_restaurants_integrated():
                 'message': 'Missing job_id in request'
             }), 400
         
+        # Fetch restaurant packages from backend API
         restaurant_packages_data = fetch_filtered_variants(filter_data)
 
         adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
@@ -826,14 +827,11 @@ def match_restaurants_integrated():
                 'venue_matches': []
             })
        
-              
-                    
-                  
+        # Fetch user requirements from backend API
+        user_requirements_data = fetch_user_requirements(job_id)
         
-        
+        # Parse user requirements and restaurant data
         user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
-        
-        
         restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
         
         if len(restaurant_packages) > 0:
@@ -852,11 +850,11 @@ def match_restaurants_integrated():
                     if has_items:
                         break
                         
-                
+        # Match restaurants against user requirements
         matcher = OptimizedRestaurantMatcher(threshold=threshold)
         match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
         
-        
+        # Process match results
         venue_heaps = {}
         simplified_results = []
         
@@ -908,11 +906,13 @@ def match_restaurants_integrated():
     
     except Exception as e:
         import traceback
+        logger.error(f"Error in match-restaurants-integrated: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             'status': 'error',
             'message': str(e)
         }), 500
-         
+        
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
