@@ -899,6 +899,7 @@ def fetch_user_requirements(job_id):
         logger.error(f"Error fetching user requirements: {str(e)}")
         raise
 
+
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
 def match_restaurants_integrated():
     """
@@ -1009,8 +1010,8 @@ def match_restaurants_integrated():
             if venue_id:
                 if venue_id not in venue_heaps:
                     venue_heaps[venue_id] = []
-                
-                heapq.heappush(venue_heaps[venue_id], (-match_percentage, simplified_result))
+         
+                heapq.heappush(venue_heaps[venue_id], (-match_percentage, result.restaurant_id, simplified_result))
         
         venue_matches = []
         for venue_id, heap in venue_heaps.items():
@@ -1022,8 +1023,8 @@ def match_restaurants_integrated():
                 venue_matches.append({
                     'venue_id': venue_id,
                     'match_percentage': match_percentage,
-                    'best_variant_id': best_match[1]['variant_id'],
-                    'best_variant_name': best_match[1]['variant_name']
+                    'best_variant_id': best_match[2]['variant_id'],
+                    'best_variant_name': best_match[2]['variant_name']
                 })
         
         venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
@@ -1043,7 +1044,6 @@ def match_restaurants_integrated():
             'status': 'error',
             'message': str(e)
         }), 500
-
  
 @app.route('/health', methods=['GET'])
 def health_check():
