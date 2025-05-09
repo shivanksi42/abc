@@ -39,6 +39,201 @@ logger.info(f"User requirements base endpoint: {USER_REQUIREMENTS_BASE_ENDPOINT}
 
 
 
+
+class ServiceMatcher:
+    def __init__(self):
+        pass
+    
+    def extract_venue_services(self, variant_data):
+        """
+        Extract services from a venue variant
+        
+        Args:
+            variant_data: Variant data from the API response
+            
+        Returns:
+            Dictionary with service names and their details
+        """
+        venue_services = {}
+        
+        # Extract free services
+        if "freeServices" in variant_data and isinstance(variant_data["freeServices"], list):
+            for service in variant_data["freeServices"]:
+                service_name = service.get("serviceName", "").lower()
+                if service_name:
+                    service_category = service.get("serviceCategory", "")
+                    service_variant = service.get("Variant", "")
+                    service_variant_type = service.get("VariantType", "")
+                    
+                    venue_services[service_name] = {
+                        "category": service_category,
+                        "variant": service_variant,
+                        "variant_type": service_variant_type,
+                        "is_paid": False,
+                        "price": 0
+                    }
+        
+        # Extract paid services
+        if "paidServices" in variant_data and isinstance(variant_data["paidServices"], list):
+            for service in variant_data["paidServices"]:
+                service_name = service.get("serviceName", "").lower()
+                if service_name:
+                    service_category = service.get("serviceCategory", "")
+                    service_variant = service.get("Variant", "")
+                    service_variant_type = service.get("VariantType", "")
+                    price = service.get("Price", "0")
+                    
+                    # Convert price to float, handle string values
+                    try:
+                        price_value = float(price)
+                    except ValueError:
+                        price_value = 0
+                    
+                    venue_services[service_name] = {
+                        "category": service_category,
+                        "variant": service_variant,
+                        "variant_type": service_variant_type,
+                        "is_paid": True,
+                        "price": price_value
+                    }
+        
+        return venue_services
+    
+    def extract_user_services(self, user_requirements_data):
+        """
+        Extract services from user requirements
+        
+        Args:
+            user_requirements_data: User requirements data from the API
+            
+        Returns:
+            Dictionary with service names and their details
+        """
+        user_services = {}
+        
+        # Check if services exist in user requirements
+        if "data" in user_requirements_data and "services" in user_requirements_data["data"]:
+            services_list = user_requirements_data["data"]["services"]
+            
+            if isinstance(services_list, list):
+                for service in services_list:
+                    service_name = service.get("serviceName", "").lower()
+                    if service_name:
+                        price = service.get("Price", "0")
+                        
+                        # Determine if service is free or paid
+                        is_paid = True
+                        if isinstance(price, str) and price.lower() == "free":
+                            is_paid = False
+                            price_value = 0
+                        else:
+                            try:
+                                price_value = float(price)
+                            except ValueError:
+                                price_value = 0
+                        
+                        service_category = service.get("serviceCategory", "")
+                        service_variant = service.get("Variant", "")
+                        service_variant_type = service.get("VariantType", "")
+                        
+                        user_services[service_name] = {
+                            "category": service_category,
+                            "variant": service_variant,
+                            "variant_type": service_variant_type,
+                            "is_paid": is_paid,
+                            "price": price_value
+                        }
+        
+        return user_services
+    
+    def calculate_service_match(self, venue_services, user_services):
+        """
+        Calculate service match percentage between venue and user services
+        
+        Args:
+            venue_services: Dictionary of venue services
+            user_services: Dictionary of user services
+            
+        Returns:
+            Dictionary with match details
+        """
+        if not user_services:
+            return {
+                "match_percentage": 100.0,
+                "matched_services": [],
+                "unmatched_services": []
+            }
+        
+        matched_services = []
+        unmatched_services = []
+        total_services = len(user_services)
+        matched_count = 0
+        
+        for service_name, user_service in user_services.items():
+            if service_name in venue_services:
+                venue_service = venue_services[service_name]
+                
+                # Check if the payment type matches (free vs paid)
+                payment_match = (user_service["is_paid"] == venue_service["is_paid"])
+                
+                # For variant and variant_type, check if they exist and match
+                variant_match = (not user_service["variant"] or 
+                                user_service["variant"].lower() == venue_service["variant"].lower())
+                
+                variant_type_match = (not user_service["variant_type"] or 
+                                     user_service["variant_type"].lower() == venue_service["variant_type"].lower())
+                
+                # If basic service is available and either payment, variant or variant_type match
+                if payment_match or variant_match or variant_type_match:
+                    matched_count += 1
+                    matched_services.append({
+                        "name": service_name,
+                        "variant": user_service["variant"],
+                        "variant_type": user_service["variant_type"],
+                        "is_paid": user_service["is_paid"],
+                        "payment_match": payment_match,
+                        "variant_match": variant_match,
+                        "variant_type_match": variant_type_match
+                    })
+                else:
+                    unmatched_services.append({
+                        "name": service_name,
+                        "variant": user_service["variant"],
+                        "variant_type": user_service["variant_type"],
+                        "is_paid": user_service["is_paid"],
+                        "reason": "Service found but details do not match"
+                    })
+            else:
+                unmatched_services.append({
+                    "name": service_name,
+                    "variant": user_service["variant"],
+                    "variant_type": user_service["variant_type"],
+                    "is_paid": user_service["is_paid"],
+                    "reason": "Service not available at venue"
+                })
+        
+        match_percentage = (matched_count / total_services * 100) if total_services > 0 else 100.0
+        
+        return {
+            "match_percentage": round(match_percentage, 2),
+            "matched_services": matched_services,
+            "unmatched_services": unmatched_services
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class MenuItem:
     def __init__(self, item_type: str, count: int):
         self.item_type = item_type
@@ -79,7 +274,8 @@ class MatchResult:
     def __init__(self, restaurant_id: str, restaurant_name: str, 
                  overall_match: float, category_matches: Dict[str, float],
                  unmet_requirements: List[Dict[str, Any]], price: float, rating: float, 
-                 package_id: str = "", venue_id: str = ""):
+                 package_id: str = "", venue_id: str = "",
+                 service_match: Dict[str, Any] = None):
         self.restaurant_id = restaurant_id  
         self.restaurant_name = restaurant_name
         self.overall_match = overall_match
@@ -88,7 +284,8 @@ class MatchResult:
         self.price = price
         self.rating = rating
         self.package_id = package_id
-        self.venue_id = venue_id  # Added venue_id
+        self.venue_id = venue_id
+        self.service_match = service_match or {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
     
     def to_dict(self):
         """Convert MatchResult to dictionary for JSON serialization"""
@@ -97,14 +294,16 @@ class MatchResult:
             "variant_name": self.restaurant_name,
             "overall_match": self.overall_match,
             "match_percentage": round(self.overall_match * 100, 2), 
+            "service_match_percentage": round(self.service_match.get("match_percentage", 100.0), 2),
             "category_matches": {k: round(v * 100, 2) for k, v in self.category_matches.items()}, 
             "unmet_requirements": self.unmet_requirements,
+            "unmet_services": self.service_match.get("unmatched_services", []),
             "price": self.price,
             "rating": self.rating,
             "package_id": self.package_id,
-            "venue_id": self.venue_id  # Include venue_id in the dictionary
+            "venue_id": self.venue_id
         }
-
+        
 class OptimizedRestaurantMatcher:
     def __init__(self, threshold: float = 0.7, top_n: int = 10):
         self.threshold = threshold
@@ -457,19 +656,211 @@ def api_to_user_requirements(api_response, is_user_requirement=True):
     
     return UserRequirement({})
 
+# def adapt_restaurant_data_updated(api_response):
+#     """
+#     Adapts the API response format to match what the restaurant matcher expects
+#     Handles both dictionary and list formats for availableMenuCount
+#     Now also extracts and stores venueId which is directly in the variant object
+    
+#     Debug version with more logging
+#     """
+#     adapted_data = []
+    
+#     if not isinstance(api_response, dict):
+#         return adapted_data
+    
+    
+#     for variant in api_response.get('variants', []):
+#         if not isinstance(variant, dict):
+#             continue
+            
+#         venue_id = variant.get("venueId", "")
+        
+#         working_variant = variant
+#         if hasattr(working_variant, '_doc') and isinstance(working_variant._doc, dict):
+#             working_variant = working_variant._doc
+#         elif "$__" in working_variant and "_doc" in working_variant:
+#             working_variant = working_variant["_doc"]
+        
+        
+#         restaurant = {
+#             "id": working_variant.get("_id", ""),
+#             "name": working_variant.get("name", ""),
+#             "price": float(working_variant.get("cost", 0.0)),
+#             "rating": 0.0,  
+#             "package_id": working_variant.get("packageId", ""),
+#             "venue_id": venue_id,  
+#             "categories": {}
+#         }
+        
+        
+#         found_menu_items = False
+        
+      
+#         available_menu_count = None
+        
+#         if "availableMenuCount" in working_variant:
+#             available_menu_count = working_variant["availableMenuCount"]
+        
+#         if available_menu_count is None and "_doc" in working_variant:
+#             doc = working_variant["_doc"]
+#             if isinstance(doc, dict) and "availableMenuCount" in doc:
+#                 available_menu_count = doc["availableMenuCount"]
+        
+#         if available_menu_count is None:
+#             if "availableMenuCount" in variant:
+#                 available_menu_count = variant["availableMenuCount"]
+        
+#         if available_menu_count is None and hasattr(variant, "_doc") and hasattr(variant._doc, "availableMenuCount"):
+#             available_menu_count = variant._doc.availableMenuCount
+        
+  
+#             if hasattr(variant, "__dict__"):
+#                 logger.debug(f"Variant attributes: {list(variant.__dict__.keys())}")
+                
+#             if "data" in working_variant and isinstance(working_variant["data"], dict):
+#                 if "availableMenuCount" in working_variant["data"]:
+#                     available_menu_count = working_variant["data"]["availableMenuCount"]
+        
+#         if available_menu_count is not None:
+#             menu_sections = []
+            
+#             if isinstance(available_menu_count, dict):
+#                 menu_sections = [{"name": "Menu Items", "availableMenuCount": available_menu_count}]
+#             elif isinstance(available_menu_count, list):
+#                 menu_sections = available_menu_count
+#             else:
+#                 logger.warning(f"Unexpected availableMenuCount type: {type(available_menu_count)}")
+            
+#             for menu_section in menu_sections:
+#                 if isinstance(menu_section, dict):
+#                     cat_name = menu_section.get("name", "Uncategorized")
+                    
+#                     if cat_name not in restaurant["categories"]:
+#                         restaurant["categories"][cat_name] = {"cuisines": {}}
+                    
+#                     if "subcategoriesByCuisine" in menu_section:
+#                         for cuisine_name, subcategory_list in menu_section.get("subcategoriesByCuisine", {}).items():
+#                             if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
+#                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
+#                                     "subcategories": {},
+#                                     "contains_egg": False
+#                                 }
+                            
+#                             for subcategory_data in subcategory_list:
+#                                 subcat_name = subcategory_data.get("name", "General")
+                                
+#                                 if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
+#                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
+#                                         "items": {}
+#                                     }
+                                
+#                                 count_data = subcategory_data.get("availableMenuCount", subcategory_data.get("count", {}))
+                                
+#                                 if isinstance(count_data, dict):
+#                                     for item_type, count in count_data.items():
+#                                         if count > 0:
+#                                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
+#                                             found_menu_items = True
+                                            
+#                                             if item_type == "Egg" and count > 0:
+#                                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
+#                                 elif isinstance(count_data, list):
+#                                     for item in count_data:
+#                                         if isinstance(item, dict):
+#                                             item_type = item.get("name", "Unknown")
+#                                             count = item.get("count", 0)
+#                                             if count > 0:
+#                                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
+#                                                 found_menu_items = True
+                                                
+#                                                 if item_type == "Egg" and count > 0:
+#                                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
+#                     elif "availableMenuCount" in menu_section or "count" in menu_section:
+#                         count_data = menu_section.get("availableMenuCount", menu_section.get("count", {}))
+#                         cuisine_name = "General"
+#                         subcat_name = "General"
+                        
+#                         if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
+#                             restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
+#                                 "subcategories": {},
+#                                 "contains_egg": False
+#                             }
+                            
+#                         if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
+#                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
+#                                 "items": {}
+#                             }
+                        
+#                         if isinstance(count_data, dict):
+#                             for item_type, count in count_data.items():
+#                                 if count > 0:
+#                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
+#                                     found_menu_items = True
+                                    
+#                                     if item_type == "Egg" and count > 0:
+#                                         restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
+#                         elif isinstance(count_data, list):
+#                             for item in count_data:
+#                                 if isinstance(item, dict):
+#                                     item_type = item.get("name", "Unknown")
+#                                     count = item.get("count", 0)
+#                                     if count > 0:
+#                                         restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
+#                                         found_menu_items = True
+                                        
+#                                         if item_type == "Egg" and count > 0:
+#                                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
+        
+      
+#             cat_name = "Menu Items"
+#             cuisine_name = "General"
+#             subcat_name = "General"
+            
+#             if cat_name not in restaurant["categories"]:
+#                 restaurant["categories"][cat_name] = {"cuisines": {}}
+            
+#             if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
+#                 restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
+#                     "subcategories": {},
+#                     "contains_egg": False
+#                 }
+            
+#             if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
+#                 restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
+#                     "items": {}
+#                 }
+            
+#             default_items = {
+#                 "Veg": 10,
+#                 "Non-Veg": 10,
+#                 "Dessert": 5,
+#                 "Beverage": 5
+#             }
+            
+#             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"] = default_items
+#             found_menu_items = True
+            
+            
+#         if restaurant["name"] and restaurant["id"]:
+#             adapted_data.append(restaurant)
+    
+#     return adapted_data
+
 def adapt_restaurant_data_updated(api_response):
     """
     Adapts the API response format to match what the restaurant matcher expects
     Handles both dictionary and list formats for availableMenuCount
     Now also extracts and stores venueId which is directly in the variant object
-    
-    Debug version with more logging
+    Also preserves the original variant data structure for service matching
     """
     adapted_data = []
     
     if not isinstance(api_response, dict):
         return adapted_data
     
+    # Store original variants for later service matching
+    original_variants = {}
     
     for variant in api_response.get('variants', []):
         if not isinstance(variant, dict):
@@ -483,21 +874,26 @@ def adapt_restaurant_data_updated(api_response):
         elif "$__" in working_variant and "_doc" in working_variant:
             working_variant = working_variant["_doc"]
         
+        variant_id = working_variant.get("_id", "")
+        if variant_id:
+            # Store original variant for service matching
+            original_variants[variant_id] = working_variant
         
         restaurant = {
-            "id": working_variant.get("_id", ""),
+            "id": variant_id,
             "name": working_variant.get("name", ""),
             "price": float(working_variant.get("cost", 0.0)),
             "rating": 0.0,  
             "package_id": working_variant.get("packageId", ""),
             "venue_id": venue_id,  
-            "categories": {}
+            "categories": {},
+            # Add references to services for later matching
+            "paid_services": working_variant.get("paidServices", []),
+            "free_services": working_variant.get("freeServices", [])
         }
-        
         
         found_menu_items = False
         
-      
         available_menu_count = None
         
         if "availableMenuCount" in working_variant:
@@ -515,7 +911,7 @@ def adapt_restaurant_data_updated(api_response):
         if available_menu_count is None and hasattr(variant, "_doc") and hasattr(variant._doc, "availableMenuCount"):
             available_menu_count = variant._doc.availableMenuCount
         
-  
+        if available_menu_count is None:
             if hasattr(variant, "__dict__"):
                 logger.debug(f"Variant attributes: {list(variant.__dict__.keys())}")
                 
@@ -613,7 +1009,8 @@ def adapt_restaurant_data_updated(api_response):
                                         if item_type == "Egg" and count > 0:
                                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
         
-      
+        # If no menu items found, add some default ones for testing
+        if not found_menu_items:
             cat_name = "Menu Items"
             cuisine_name = "General"
             subcat_name = "General"
@@ -642,11 +1039,13 @@ def adapt_restaurant_data_updated(api_response):
             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"] = default_items
             found_menu_items = True
             
-            
         if restaurant["name"] and restaurant["id"]:
             adapted_data.append(restaurant)
     
+    api_response["_original_variants"] = original_variants
+    
     return adapted_data
+
    
         
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
@@ -788,7 +1187,7 @@ def match_restaurants_integrated():
     """
     Integrated API endpoint that fetches data from backend APIs 
     and performs matching with updated parser functions
-    Now uses heapq for more efficient processing of best matches
+    Now includes service matching
     """
     try:
         data = request.json
@@ -834,6 +1233,12 @@ def match_restaurants_integrated():
         user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
         restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
         
+        # Initialize service matcher
+        service_matcher = ServiceMatcher()
+        
+        # Extract user services
+        user_services = service_matcher.extract_user_services(user_requirements_data)
+        
         if len(restaurant_packages) > 0:
             for idx, rest in enumerate(restaurant_packages):
                 cat_count = len(rest.categories)
@@ -861,13 +1266,32 @@ def match_restaurants_integrated():
         for result in match_results:
             match_percentage = round(result.overall_match * 100, 2)
             venue_id = result.venue_id
+            variant_id = result.restaurant_id
+            
+            # Find the corresponding variant in the original data
+            variant_data = None
+            for variant in restaurant_packages_data.get('variants', []):
+                if isinstance(variant, dict) and variant.get("_id", "") == variant_id:
+                    variant_data = variant
+                    break
+                elif hasattr(variant, "_doc") and variant._doc.get("_id", "") == variant_id:
+                    variant_data = variant._doc
+                    break
+            
+            # Extract venue services and calculate service match
+            service_match_result = {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
+            if variant_data:
+                venue_services = service_matcher.extract_venue_services(variant_data)
+                service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
             
             simplified_result = {
                 'variant_id': result.restaurant_id,  
                 'variant_name': result.restaurant_name,
                 'match_percentage': match_percentage,
+                'service_match_percentage': service_match_result["match_percentage"],
                 'price': result.price,
                 'unmet_requirements': result.unmet_requirements,
+                'unmet_services': service_match_result["unmatched_services"],
                 'package_id': result.package_id,
                 'venue_id': venue_id
             }
@@ -878,23 +1302,28 @@ def match_restaurants_integrated():
                 if venue_id not in venue_heaps:
                     venue_heaps[venue_id] = []
          
-                heapq.heappush(venue_heaps[venue_id], (-match_percentage, result.restaurant_id, simplified_result))
+                # Use both food match and service match for ordering, with primary emphasis on food match
+                combined_score = match_percentage * 0.7 + service_match_result["match_percentage"] * 0.3
+                heapq.heappush(venue_heaps[venue_id], (-combined_score, result.restaurant_id, simplified_result))
         
         venue_matches = []
         for venue_id, heap in venue_heaps.items():
             if heap:
                 best_match = heapq.heappop(heap)
                 
-                match_percentage = -best_match[0]
+                match_percentage = -best_match[0]  # Convert back from negative
                 
                 venue_matches.append({
                     'venue_id': venue_id,
-                    'match_percentage': match_percentage,
+                    'match_percentage': round(best_match[2]['match_percentage'], 2),
+                    'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),
+                    'combined_match_percentage': round(-best_match[0], 2),  # Combined score
                     'best_variant_id': best_match[2]['variant_id'],
                     'best_variant_name': best_match[2]['variant_name']
                 })
         
-        venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
+        # Sort by the combined match percentage
+        venue_matches.sort(key=lambda x: x['combined_match_percentage'], reverse=True)
         
         return jsonify({
             'status': 'success',
@@ -913,6 +1342,7 @@ def match_restaurants_integrated():
             'message': str(e)
         }), 500
         
+                
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
