@@ -432,13 +432,10 @@ def api_to_user_requirements(api_response, is_user_requirement=True):
     Returns:
         UserRequirement object
     """
-    logger.info(f"Processing {'user requirements' if is_user_requirement else 'restaurant variants'}")
     
     count_field = "count" if is_user_requirement else "availableMenuCount"
-    logger.info(f"Looking for '{count_field}' field in data structure")
     
     if not isinstance(api_response, dict):
-        logger.warning(f"API response is not a dictionary, but a {type(api_response)}")
         return UserRequirement({})
     
     if "menuSections" in api_response:
@@ -458,7 +455,6 @@ def api_to_user_requirements(api_response, is_user_requirement=True):
         if isinstance(first_variant, dict) and count_field in first_variant:
             return parse_user_requirements({count_field: first_variant.get(count_field, [])}, count_field)
     
-    logger.warning(f"Could not find menuSections or {count_field} in API response")
     return UserRequirement({})
 
 def adapt_restaurant_data_updated(api_response):
@@ -472,29 +468,21 @@ def adapt_restaurant_data_updated(api_response):
     adapted_data = []
     
     if not isinstance(api_response, dict):
-        logger.warning("API response is not a dictionary")
         return adapted_data
     
-    logger.info(f"Processing {len(api_response.get('variants', []))} variants")
     
     for variant in api_response.get('variants', []):
-        # Check if variant is a dictionary before processing
         if not isinstance(variant, dict):
-            logger.warning(f"Skipping variant because it's not a dictionary: {type(variant)}")
             continue
             
-        # Get venueId before potentially modifying the variant object
         venue_id = variant.get("venueId", "")
         
-        # Handle Mongoose document objects which might have _doc property
         working_variant = variant
         if hasattr(working_variant, '_doc') and isinstance(working_variant._doc, dict):
             working_variant = working_variant._doc
         elif "$__" in working_variant and "_doc" in working_variant:
             working_variant = working_variant["_doc"]
         
-        # Debug the structure of working_variant after extraction
-        logger.debug(f"Working variant keys after _doc extraction: {list(working_variant.keys())}")
         
         restaurant = {
             "id": working_variant.get("_id", ""),
@@ -502,122 +490,83 @@ def adapt_restaurant_data_updated(api_response):
             "price": float(working_variant.get("cost", 0.0)),
             "rating": 0.0,  
             "package_id": working_variant.get("packageId", ""),
-            "venue_id": venue_id,  # Use the venueId we extracted earlier
+            "venue_id": venue_id,  
             "categories": {}
         }
         
-        logger.info(f"Processing variant: {working_variant.get('name', 'Unknown')} (ID: {working_variant.get('_id', 'Unknown')})")
         
-        # Initialize as False to track if we found any menu items
         found_menu_items = False
         
-        # Check for availableMenuCount in the working_variant
-        # First try to directly access the structure
+      
         available_menu_count = None
         
-        # Try multiple paths to find the data
         if "availableMenuCount" in working_variant:
             available_menu_count = working_variant["availableMenuCount"]
-            logger.debug(f"Found availableMenuCount directly in working_variant: {type(available_menu_count)}")
         
-        # If not found and _doc is present, try there
         if available_menu_count is None and "_doc" in working_variant:
             doc = working_variant["_doc"]
             if isinstance(doc, dict) and "availableMenuCount" in doc:
                 available_menu_count = doc["availableMenuCount"]
-                logger.debug(f"Found availableMenuCount in _doc: {type(available_menu_count)}")
         
-        # If still not found, try the original variant
         if available_menu_count is None:
             if "availableMenuCount" in variant:
                 available_menu_count = variant["availableMenuCount"]
-                logger.debug(f"Found availableMenuCount in original variant: {type(available_menu_count)}")
         
-        # If still not found, check if there's another nested level
         if available_menu_count is None and hasattr(variant, "_doc") and hasattr(variant._doc, "availableMenuCount"):
             available_menu_count = variant._doc.availableMenuCount
-            logger.debug(f"Found availableMenuCount in variant._doc attribute: {type(available_menu_count)}")
         
-        # Debug what we found
-        if available_menu_count is not None:
-            logger.debug(f"availableMenuCount found with type: {type(available_menu_count)}")
-            if isinstance(available_menu_count, dict):
-                logger.debug(f"availableMenuCount dict keys: {available_menu_count.keys()}")
-            elif isinstance(available_menu_count, list):
-                logger.debug(f"availableMenuCount list length: {len(available_menu_count)}")
-                if len(available_menu_count) > 0:
-                    logger.debug(f"First item type: {type(available_menu_count[0])}")
-        else:
-            logger.warning(f"availableMenuCount not found in variant {restaurant['name']}")
-            
-            # As a last resort, check all attributes of the variant object
+  
             if hasattr(variant, "__dict__"):
                 logger.debug(f"Variant attributes: {list(variant.__dict__.keys())}")
                 
-            # And check if there's a "data" field with the menu count
             if "data" in working_variant and isinstance(working_variant["data"], dict):
                 if "availableMenuCount" in working_variant["data"]:
                     available_menu_count = working_variant["data"]["availableMenuCount"]
-                    logger.debug(f"Found availableMenuCount in data field: {type(available_menu_count)}")
         
-        # If we found available_menu_count, process it
         if available_menu_count is not None:
-            # Handle both list and dictionary formats
             menu_sections = []
             
             if isinstance(available_menu_count, dict):
-                # If it's a dictionary, convert to a list format with a single item
                 menu_sections = [{"name": "Menu Items", "availableMenuCount": available_menu_count}]
             elif isinstance(available_menu_count, list):
                 menu_sections = available_menu_count
             else:
                 logger.warning(f"Unexpected availableMenuCount type: {type(available_menu_count)}")
             
-            # Process each menu section
             for menu_section in menu_sections:
                 if isinstance(menu_section, dict):
-                    # Get category name
                     cat_name = menu_section.get("name", "Uncategorized")
                     
-                    # Initialize category if needed
                     if cat_name not in restaurant["categories"]:
                         restaurant["categories"][cat_name] = {"cuisines": {}}
                     
-                    # Check for subcategoriesByCuisine
                     if "subcategoriesByCuisine" in menu_section:
                         for cuisine_name, subcategory_list in menu_section.get("subcategoriesByCuisine", {}).items():
-                            # Initialize cuisine if needed
                             if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
                                     "subcategories": {},
                                     "contains_egg": False
                                 }
                             
-                            # Process each subcategory
                             for subcategory_data in subcategory_list:
                                 subcat_name = subcategory_data.get("name", "General")
                                 
-                                # Initialize subcategory if needed
                                 if subcat_name not in restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"]:
                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name] = {
                                         "items": {}
                                     }
                                 
-                                # Get count data - handle both formats
                                 count_data = subcategory_data.get("availableMenuCount", subcategory_data.get("count", {}))
                                 
-                                # Process counts
                                 if isinstance(count_data, dict):
                                     for item_type, count in count_data.items():
                                         if count > 0:
                                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
                                             found_menu_items = True
                                             
-                                            # Check for eggs
                                             if item_type == "Egg" and count > 0:
                                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
                                 elif isinstance(count_data, list):
-                                    # Handle list format
                                     for item in count_data:
                                         if isinstance(item, dict):
                                             item_type = item.get("name", "Unknown")
@@ -626,16 +575,13 @@ def adapt_restaurant_data_updated(api_response):
                                                 restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
                                                 found_menu_items = True
                                                 
-                                                # Check for eggs
                                                 if item_type == "Egg" and count > 0:
                                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
-                    # Check for direct count field (simplified format)
                     elif "availableMenuCount" in menu_section or "count" in menu_section:
                         count_data = menu_section.get("availableMenuCount", menu_section.get("count", {}))
                         cuisine_name = "General"
                         subcat_name = "General"
                         
-                        # Initialize necessary structures
                         if cuisine_name not in restaurant["categories"][cat_name]["cuisines"]:
                             restaurant["categories"][cat_name]["cuisines"][cuisine_name] = {
                                 "subcategories": {},
@@ -647,18 +593,15 @@ def adapt_restaurant_data_updated(api_response):
                                 "items": {}
                             }
                         
-                        # Process counts
                         if isinstance(count_data, dict):
                             for item_type, count in count_data.items():
                                 if count > 0:
                                     restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
                                     found_menu_items = True
                                     
-                                    # Check for eggs
                                     if item_type == "Egg" and count > 0:
                                         restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
                         elif isinstance(count_data, list):
-                            # Handle list format
                             for item in count_data:
                                 if isinstance(item, dict):
                                     item_type = item.get("name", "Unknown")
@@ -667,15 +610,10 @@ def adapt_restaurant_data_updated(api_response):
                                         restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"][item_type] = count
                                         found_menu_items = True
                                         
-                                        # Check for eggs
                                         if item_type == "Egg" and count > 0:
                                             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["contains_egg"] = True
         
-        # If no menu items were found, add default or placeholder values
-        if not found_menu_items:
-            logger.warning(f"No menu items found for restaurant: {restaurant['name']}, adding default values")
-            
-            # Add default items so the restaurant can be matched with at least some items
+      
             cat_name = "Menu Items"
             cuisine_name = "General"
             subcat_name = "General"
@@ -694,7 +632,6 @@ def adapt_restaurant_data_updated(api_response):
                     "items": {}
                 }
             
-            # Add some common default items with counts
             default_items = {
                 "Veg": 10,
                 "Non-Veg": 10,
@@ -705,184 +642,13 @@ def adapt_restaurant_data_updated(api_response):
             restaurant["categories"][cat_name]["cuisines"][cuisine_name]["subcategories"][subcat_name]["items"] = default_items
             found_menu_items = True
             
-            logger.info(f"Added default menu items for restaurant: {restaurant['name']}")
             
-        # Add restaurant to result list if it has a name and ID
         if restaurant["name"] and restaurant["id"]:
-            logger.info(f"Added restaurant to result list: {restaurant['name']}")
             adapted_data.append(restaurant)
     
-    logger.info(f"Successfully adapted {len(adapted_data)} restaurants out of {len(api_response.get('variants', []))} variants")
     return adapted_data
-
-def add_debugging_to_match_restaurants():
-    """
-    Update the match_restaurants_integrated function to add debugging
-    This can be called at the start of the function
-    """
-    try:
-        data = request.json
+   
         
-        logger.info(f"Request data keys: {', '.join(data.keys())}")
-        
-        # Then, fetch the filtered variants
-        filter_data = data.get('filter_data', {})
-        restaurant_packages_data = fetch_filtered_variants(filter_data)
-        
-        # Now debug the response structure
-        logger.debug(f"API Response keys: {', '.join(restaurant_packages_data.keys())}")
-        
-        # If there are variants, inspect the first one
-        if 'variants' in restaurant_packages_data and restaurant_packages_data['variants']:
-            logger.debug("Inspecting first variant structure:")
-            first_variant = restaurant_packages_data['variants'][0]
-            debug_variant_structure(first_variant)
-            
-            # Check for availableMenuCount in various places
-            logger.debug("Checking for availableMenuCount in variant structure:")
-            
-            # Direct check
-            if isinstance(first_variant, dict):
-                if "availableMenuCount" in first_variant:
-                    logger.debug(f"availableMenuCount found directly in variant: {type(first_variant['availableMenuCount'])}")
-                else:
-                    logger.debug("availableMenuCount not found directly in variant")
-            
-            # Check in _doc
-            if hasattr(first_variant, "_doc"):
-                doc = first_variant._doc
-                if isinstance(doc, dict):
-                    if "availableMenuCount" in doc:
-                        logger.debug(f"availableMenuCount found in _doc attribute: {type(doc['availableMenuCount'])}")
-                    else:
-                        logger.debug("availableMenuCount not found in _doc attribute")
-            
-            # Check in dictionary _doc
-            if isinstance(first_variant, dict) and "_doc" in first_variant:
-                doc = first_variant["_doc"]
-                if isinstance(doc, dict):
-                    if "availableMenuCount" in doc:
-                        logger.debug(f"availableMenuCount found in _doc dictionary: {type(doc['availableMenuCount'])}")
-                    else:
-                        logger.debug("availableMenuCount not found in _doc dictionary")
-                        
-                    # Log all keys in the _doc dictionary
-                    logger.debug(f"Keys in _doc dictionary: {list(doc.keys())}")
-            
-            # Check for venueId
-            if isinstance(first_variant, dict):
-                venue_id = first_variant.get("venueId", "NOT FOUND")
-                logger.debug(f"venueId directly in variant: {venue_id}")
-                
-            if hasattr(first_variant, "_doc"):
-                doc = first_variant._doc
-                if isinstance(doc, dict):
-                    doc_venue_id = doc.get("venueId", "NOT FOUND")
-                    logger.debug(f"venueId in _doc: {doc_venue_id}")
-            
-            if isinstance(first_variant, dict) and "_doc" in first_variant:
-                doc = first_variant["_doc"]
-                if isinstance(doc, dict):
-                    doc_venue_id = doc.get("venueId", "NOT FOUND") 
-                    logger.debug(f"venueId in ['_doc']: {doc_venue_id}")
-    
-    except Exception as e:
-        logger.error(f"Error in debugging function: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        
-def debug_variant_structure(variant, indent=0):
-    """
-    Recursively print the structure of a variant to help diagnose issues
-    
-    Args:
-        variant: The variant object to inspect
-        indent: Indentation level for printing
-    """
-    prefix = ' ' * indent
-    
-    if isinstance(variant, dict):
-        logger.debug(f"{prefix}Dict with keys: {', '.join(variant.keys())}")
-        # Print some important keys with their types
-        for key in ['_id', 'name', 'venueId', 'cost', 'packageId', 'availableMenuCount']:
-            if key in variant:
-                value = variant[key]
-                logger.debug(f"{prefix}- {key}: {type(value).__name__}")
-                
-                # For nested structures, go deeper
-                if key == 'availableMenuCount' and (isinstance(value, dict) or isinstance(value, list)):
-                    if isinstance(value, dict):
-                        logger.debug(f"{prefix}  availableMenuCount is a dict with keys: {', '.join(value.keys())}")
-                    elif isinstance(value, list) and len(value) > 0:
-                        logger.debug(f"{prefix}  availableMenuCount is a list with {len(value)} items")
-                        if len(value) > 0 and isinstance(value[0], dict):
-                            logger.debug(f"{prefix}  First item keys: {', '.join(value[0].keys())}")
-        
-        # If _doc exists, drill into it
-        if '_doc' in variant:
-            logger.debug(f"{prefix}Found _doc key, exploring:")
-            debug_variant_structure(variant['_doc'], indent + 2)
-    elif hasattr(variant, '_doc'):
-        logger.debug(f"{prefix}Object with _doc attribute")
-        debug_variant_structure(variant._doc, indent + 2)
-    elif isinstance(variant, list):
-        logger.debug(f"{prefix}List with {len(variant)} items")
-        if len(variant) > 0:
-            logger.debug(f"{prefix}First item is a {type(variant[0]).__name__}")
-            if isinstance(variant[0], dict) or hasattr(variant[0], '_doc'):
-                debug_variant_structure(variant[0], indent + 2)
-    else:
-        logger.debug(f"{prefix}Other type: {type(variant).__name__}")
-
-def add_debugging_to_match_restaurants():
-    """
-    Update the match_restaurants_integrated function to add debugging
-    This can be called at the start of the function
-    """
-    try:
-        data = request.json
-        
-        logger.info(f"Request data keys: {', '.join(data.keys())}")
-        
-        # Then, fetch the filtered variants
-        filter_data = data.get('filter_data', {})
-        restaurant_packages_data = fetch_filtered_variants(filter_data)
-        
-        # Now debug the response structure
-        logger.debug(f"API Response keys: {', '.join(restaurant_packages_data.keys())}")
-        
-        # If there are variants, inspect the first one
-        if 'variants' in restaurant_packages_data and restaurant_packages_data['variants']:
-            logger.debug("Inspecting first variant structure:")
-            first_variant = restaurant_packages_data['variants'][0]
-            debug_variant_structure(first_variant)
-            
-            # Check specifically for venueId
-            if isinstance(first_variant, dict):
-                venue_id = first_variant.get("venueId", "NOT FOUND")
-                logger.debug(f"venueId directly in variant: {venue_id}")
-                
-            if hasattr(first_variant, "_doc"):
-                doc = first_variant._doc
-                if isinstance(doc, dict):
-                    doc_venue_id = doc.get("venueId", "NOT FOUND")
-                    logger.debug(f"venueId in _doc: {doc_venue_id}")
-            
-            if isinstance(first_variant, dict) and "_doc" in first_variant:
-                doc = first_variant["_doc"]
-                if isinstance(doc, dict):
-                    doc_venue_id = doc.get("venueId", "NOT FOUND")
-                    logger.debug(f"venueId in ['_doc']: {doc_venue_id}")
-    
-    except Exception as e:
-        logger.error(f"Error in debugging function: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        
-
-
 def _add_menu_item_to_restaurant(restaurant, item_type, count):
     """Helper function to add a menu item to a restaurant structure"""
     cat_name = "Menu Items"  
@@ -913,9 +679,7 @@ def parse_restaurant_packages(restaurant_data):
     restaurant_packages = []
     
     for idx, rest_data in enumerate(restaurant_data):
-        if not rest_data.get("categories"):
-            logger.warning(f"Restaurant {rest_data.get('name', f'#{idx}')} has no categories")
-            
+       
         categories = {}
         
         for cat_name, cat_data in rest_data.get("categories", {}).items():
@@ -926,10 +690,7 @@ def parse_restaurant_packages(restaurant_data):
                 
                 for subcat_name, subcat_data in cuisine_data.get("subcategories", {}).items():
                     items = subcat_data.get("items", {})
-                    
-                    if not items:
-                        logger.debug(f"Empty items in {rest_data.get('name')}/{cat_name}/{cuisine_name}/{subcat_name}")
-                    
+                
                     subcategories[subcat_name] = Subcategory(subcat_name, items)
                 
                 cuisine = Cuisine(cuisine_name, subcategories)
@@ -949,7 +710,6 @@ def parse_restaurant_packages(restaurant_data):
         
         venue_id = rest_data.get("venue_id", "")
         setattr(restaurant, 'venue_id', venue_id)
-        logger.info(f"Setting venue_id for {restaurant.name}: {venue_id}")
         
         restaurant_packages.append(restaurant)
     
@@ -963,29 +723,20 @@ def fetch_filtered_variants(filter_data):
     try:
         url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
         
-        if 'maxPerson' in filter_data:
-            logger.info(f"Fetching filtered variants with maxPerson: {filter_data['maxPerson']}")
-        else:
-            logger.info(f"Fetching filtered variants without maxPerson parameter")
-        
-        logger.info(f"Fetching filtered variants with data: {filter_data}")
+       
         response = requests.post(url, json=filter_data)
         
         if response.status_code != 200:
-            logger.error(f"Failed to fetch filtered variants: {response.text}")
             raise Exception(f"Failed to fetch filtered variants: {response.status_code} - {response.text}")
         
         data = response.json()
-        logger.info(f"Successfully fetched {len(data)} filtered variants")
         
         if 'variants' in data and len(data['variants']) > 0:
             first_variant = data['variants'][0]
-            logger.info(f"First variant structure: {json.dumps({k: type(v).__name__ for k, v in first_variant.items()})}")
              
         return data
         
     except Exception as e:
-        logger.error(f"Error fetching filtered variants: {str(e)}")
         raise    
 
 def debug_restaurant_data(restaurant_packages):
@@ -1019,21 +770,16 @@ def fetch_user_requirements(job_id):
     """
     try:
         url = f"{BACKEND_BASE_URL}{USER_REQUIREMENTS_BASE_ENDPOINT}/{job_id}"
-        logger.info(f"Fetching user requirements for job ID: {job_id}")
         
-        # No headers with token needed anymore
         response = requests.get(url)
         
         if response.status_code != 200:
-            logger.error(f"Failed to fetch user requirements: {response.text}")
             raise Exception(f"Failed to fetch user requirements: {response.status_code} - {response.text}")
         
         data = response.json()
-        logger.info(f"Successfully fetched user requirements")
         return data
         
     except Exception as e:
-        logger.error(f"Error fetching user requirements: {str(e)}")
         raise
 
 
@@ -1067,28 +813,8 @@ def match_restaurants_integrated():
             }), 400
         
         restaurant_packages_data = fetch_filtered_variants(filter_data)
-        logger.info(f"Raw restaurant data structure: {json.dumps({k: type(v).__name__ for k, v in restaurant_packages_data.items()})}")
-    
-        if 'variants' in restaurant_packages_data and len(restaurant_packages_data['variants']) > 0:
-            sample_variant = restaurant_packages_data['variants'][0]
-            logger.info(f"Sample variant keys: {list(sample_variant.keys() if isinstance(sample_variant, dict) else ['Not a dict'])}")
-            
-            # Examine the structure of the _doc field which likely contains our data
-            if isinstance(sample_variant, dict) and "_doc" in sample_variant:
-                doc = sample_variant["_doc"]
-                if isinstance(doc, dict):
-                    logger.info(f"_doc keys: {list(doc.keys())}")
-                    if "availableMenuCount" in doc:
-                        logger.info(f"availableMenuCount in _doc type: {type(doc['availableMenuCount'])}")
-                        # If it's a list, log info about the first item
-                        if isinstance(doc['availableMenuCount'], list) and len(doc['availableMenuCount']) > 0:
-                            first_item = doc['availableMenuCount'][0]
-                            logger.info(f"First availableMenuCount item type: {type(first_item)}")
-                            if isinstance(first_item, dict):
-                                logger.info(f"First item keys: {list(first_item.keys())}")
-        
+
         adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
-        logger.info(f"Adapted {len(adapted_restaurant_data)} restaurants")
         
         if not restaurant_packages_data or not restaurant_packages_data.get('variants'):
             return jsonify({
@@ -1099,123 +825,37 @@ def match_restaurants_integrated():
                 'matched_restaurants': 0,
                 'venue_matches': []
             })
-        
-        # Debug the first adapted restaurant to see if it has menu items
-        if adapted_restaurant_data and len(adapted_restaurant_data) > 0:
-            first_rest = adapted_restaurant_data[0]
-            logger.info(f"First adapted restaurant: {first_rest['name']}")
-            if "categories" in first_rest:
-                cat_count = len(first_rest["categories"])
-                logger.info(f"Categories: {cat_count}")
-                
-                # Log the first category's items
-                if cat_count > 0:
-                    first_cat_name = list(first_rest["categories"].keys())[0]
-                    first_cat = first_rest["categories"][first_cat_name]
-                    logger.info(f"First category: {first_cat_name}")
+       
+              
                     
-                    if "cuisines" in first_cat:
-                        cuisine_count = len(first_cat["cuisines"])
-                        logger.info(f"Cuisines: {cuisine_count}")
-                        
-                        if cuisine_count > 0:
-                            first_cuisine_name = list(first_cat["cuisines"].keys())[0]
-                            first_cuisine = first_cat["cuisines"][first_cuisine_name]
-                            logger.info(f"First cuisine: {first_cuisine_name}")
-                            
-                            if "subcategories" in first_cuisine:
-                                subcat_count = len(first_cuisine["subcategories"])
-                                logger.info(f"Subcategories: {subcat_count}")
-                                
-                                if subcat_count > 0:
-                                    first_subcat_name = list(first_cuisine["subcategories"].keys())[0]
-                                    first_subcat = first_cuisine["subcategories"][first_subcat_name]
-                                    logger.info(f"First subcategory: {first_subcat_name}")
-                                    
-                                    if "items" in first_subcat:
-                                        items_count = len(first_subcat["items"])
-                                        logger.info(f"Items count: {items_count}")
-                                        if items_count > 0:
-                                            logger.info(f"Items: {first_subcat['items']}")
+                  
         
-        try:
-            user_requirements_data = fetch_user_requirements(job_id)
-            logger.info("User requirements response type: {}".format(type(user_requirements_data)))
-            if isinstance(user_requirements_data, dict):
-                logger.info("User requirements keys: {}".format(user_requirements_data.keys()))
-                if "data" in user_requirements_data:
-                    logger.info("User requirements data keys: {}".format(
-                        user_requirements_data["data"].keys() if isinstance(user_requirements_data["data"], dict) else "Not a dict"
-                    ))
-        except Exception as e:
-            logger.error(f"Error fetching user requirements: {str(e)}")
-            return jsonify({
-                'status': 'error',
-                'message': f'Error fetching user requirements: {str(e)}'
-            }), 500
         
-        logger.info("Processing user requirements data...")
         user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
         
-        # Debug the user requirements structure
-        cat_count = len(user_requirements.categories)
-        logger.info(f"User requirements categories count: {cat_count}")
-        if cat_count > 0:
-            for cat_name, category in user_requirements.categories.items():
-                cuisine_count = len(category.cuisines)
-                logger.info(f"Category '{cat_name}' has {cuisine_count} cuisines")
-                
-                for cuisine_name, cuisine in category.cuisines.items():
-                    subcat_count = len(cuisine.subcategories)
-                    logger.info(f"Cuisine '{cuisine_name}' has {subcat_count} subcategories")
-                    
-                    for subcat_name, subcategory in cuisine.subcategories.items():
-                        item_count = len(subcategory.items)
-                        logger.info(f"Subcategory '{subcat_name}' has {item_count} items")
-                        if item_count > 0:
-                            logger.info(f"Item counts: {subcategory.items}")
-        
-        if not user_requirements.categories:
-            logger.warning("No categories found in user requirements")
-            return jsonify({
-                'status': 'error',
-                'message': 'No valid user requirements found',
-            }), 500
         
         restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
         
-        # Debug the parsed restaurant packages
-        logger.info(f"Parsed {len(restaurant_packages)} restaurant packages")
         if len(restaurant_packages) > 0:
             for idx, rest in enumerate(restaurant_packages):
                 cat_count = len(rest.categories)
-                logger.info(f"Restaurant {idx+1}: {rest.name} has {cat_count} categories")
                 
-                # Check if any categories have menu items
                 has_items = False
                 for cat_name, category in rest.categories.items():
                     for cuisine_name, cuisine in category.cuisines.items():
                         for subcat_name, subcategory in cuisine.subcategories.items():
                             if subcategory.items:
                                 has_items = True
-                                logger.info(f"Restaurant {rest.name} has items in {cat_name}/{cuisine_name}/{subcat_name}")
                                 break
                         if has_items:
                             break
                     if has_items:
                         break
                         
-                if not has_items:
-                    logger.warning(f"Restaurant {rest.name} has no menu items!")
-        
+                
         matcher = OptimizedRestaurantMatcher(threshold=threshold)
         match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
         
-        # Debug the match results
-        logger.info(f"Got {len(match_results)} match results")
-        if len(match_results) > 0:
-            for idx, result in enumerate(match_results[:5]):  # Just log the first 5
-                logger.info(f"Match {idx+1}: {result.restaurant_name} - {result.overall_match * 100:.2f}% match")
         
         venue_heaps = {}
         simplified_results = []
@@ -1268,7 +908,6 @@ def match_restaurants_integrated():
     
     except Exception as e:
         import traceback
-        logger.error(f"Error in match_restaurants_integrated: {str(e)}\n{traceback.format_exc()}")
         return jsonify({
             'status': 'error',
             'message': str(e)
