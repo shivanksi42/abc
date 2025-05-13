@@ -59,6 +59,10 @@ class ServiceMatcher:
         # Extract free services
         if "freeServices" in variant_data and isinstance(variant_data["freeServices"], list):
             for service in variant_data["freeServices"]:
+                # Add type check to ensure service is a dictionary
+                if not isinstance(service, dict):
+                    continue
+                    
                 service_name = service.get("serviceName", "").lower()
                 if service_name:
                     service_category = service.get("serviceCategory", "")
@@ -75,6 +79,10 @@ class ServiceMatcher:
         
         if "paidServices" in variant_data and isinstance(variant_data["paidServices"], list):
             for service in variant_data["paidServices"]:
+                # Add type check to ensure service is a dictionary
+                if not isinstance(service, dict):
+                    continue
+                    
                 service_name = service.get("serviceName", "").lower()
                 if service_name:
                     service_category = service.get("serviceCategory", "")
@@ -109,11 +117,18 @@ class ServiceMatcher:
         """
         user_services = {}
         
-        if "data" in user_requirements_data and "services" in user_requirements_data["data"]:
+        if not isinstance(user_requirements_data, dict):
+            return user_services
+        
+        if "data" in user_requirements_data and isinstance(user_requirements_data["data"], dict) and "services" in user_requirements_data["data"]:
             services_list = user_requirements_data["data"]["services"]
             
             if isinstance(services_list, list):
                 for service in services_list:
+                    # Add type check to ensure service is a dictionary
+                    if not isinstance(service, dict):
+                        continue
+                        
                     service_name = service.get("serviceName", "").lower()
                     if service_name:
                         price = service.get("Price", "0")
@@ -1041,9 +1056,13 @@ def match_restaurants_integrated():
                     break
             
             service_match_result = {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
-            if variant_data:
-                venue_services = service_matcher.extract_venue_services(variant_data)
-                service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
+            if variant_data and isinstance(variant_data, dict):  # Added check to ensure variant_data is a dictionary
+                try:
+                    venue_services = service_matcher.extract_venue_services(variant_data)
+                    service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
+                except Exception as e:
+                    logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
+                    # Continue with default service_match_result
             
             simplified_result = {
                 'variant_id': result.restaurant_id,  
@@ -1103,7 +1122,7 @@ def match_restaurants_integrated():
             'message': error_details,
             'traceback': trace if DEBUG else "Enable DEBUG mode for traceback"
         }), 500
-                        
+                                
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
