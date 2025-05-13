@@ -614,6 +614,18 @@ def api_to_user_requirements(api_response, is_user_requirement=True):
     
     count_field = "count" if is_user_requirement else "availableMenuCount"
     
+    # Add check for string type
+    if isinstance(api_response, str):
+        logger.warning(f"api_to_user_requirements received string instead of dict: {api_response[:100]}...")
+        try:
+            # Try to parse the string as JSON if it looks like JSON
+            if api_response.strip().startswith('{') and api_response.strip().endswith('}'):
+                api_response = json.loads(api_response)
+            else:
+                return UserRequirement({})
+        except:
+            return UserRequirement({})
+    
     if not isinstance(api_response, dict):
         return UserRequirement({})
     
@@ -635,6 +647,7 @@ def api_to_user_requirements(api_response, is_user_requirement=True):
             return parse_user_requirements({count_field: first_variant.get(count_field, [])}, count_field)
     
     return UserRequirement({})
+
 
 def adapt_restaurant_data_updated(api_response):
     """
@@ -927,12 +940,24 @@ def fetch_user_requirements(job_id):
         if response.status_code != 200:
             raise Exception(f"Failed to fetch user requirements: {response.status_code} - {response.text}")
         
-        data = response.json()
-        return data
+        try:
+            data = response.json()
+            
+            # Validate the response is a dictionary
+            if not isinstance(data, dict):
+                logger.error(f"User requirements API returned non-dictionary: {type(data).__name__}")
+                return {"data": {}}
+                
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode user requirements JSON: {e}")
+            logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
+            return {"data": {}}
         
     except Exception as e:
-        raise
-
+        logger.error(f"Error in fetch_user_requirements: {str(e)}")
+        return {"data": {}}
+    
 
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
 def match_restaurants_integrated():
@@ -961,6 +986,13 @@ def match_restaurants_integrated():
             }), 400
         
         restaurant_packages_data = fetch_filtered_variants(filter_data)
+        
+        # Ensure restaurant_packages_data is a dictionary
+        if not isinstance(restaurant_packages_data, dict):
+            return jsonify({
+                'status': 'error',
+                'message': f'Expected dictionary from fetch_filtered_variants, got {type(restaurant_packages_data).__name__}'
+            }), 500
 
         adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
         
@@ -975,6 +1007,13 @@ def match_restaurants_integrated():
             })
        
         user_requirements_data = fetch_user_requirements(job_id)
+        
+        # Ensure user_requirements_data is a dictionary
+        if not isinstance(user_requirements_data, dict):
+            return jsonify({
+                'status': 'error',
+                'message': f'Expected dictionary from fetch_user_requirements, got {type(user_requirements_data).__name__}'
+            }), 500
         
         user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
         restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
@@ -1052,11 +1091,19 @@ def match_restaurants_integrated():
         })
     
     except Exception as e:
+        # More detailed error reporting
+        import traceback
+        error_details = str(e)
+        trace = traceback.format_exc()
+        logger.error(f"Error in match_restaurants_integrated: {error_details}")
+        logger.error(f"Traceback: {trace}")
+        
         return jsonify({
             'status': 'error',
-            'message': str(e)
-        }), 500        
-                
+            'message': error_details,
+            'traceback': trace if DEBUG else "Enable DEBUG mode for traceback"
+        }), 500
+                        
 @app.route('/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint"""
