@@ -873,22 +873,41 @@ def fetch_filtered_variants(filter_data):
     try:
         url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
         
-       
         response = requests.post(url, json=filter_data)
         
         if response.status_code != 200:
+            logger.error(f"Failed API response: {response.status_code} - {response.text}")
             raise Exception(f"Failed to fetch filtered variants: {response.status_code} - {response.text}")
         
-        data = response.json()
+        # Check if response is valid JSON
+        try:
+            data = response.json()
+        except Exception as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
+            raise Exception(f"Invalid JSON response from server: {str(e)}")
         
-        if 'variants' in data and len(data['variants']) > 0:
-            first_variant = data['variants'][0]
-             
+        # Validate that the response is a dictionary
+        if not isinstance(data, dict):
+            logger.error(f"Unexpected response format: {type(data).__name__}")
+            raise Exception(f"Unexpected response format: expected dictionary, got {type(data).__name__}")
+        
+        # Validate that variants exist in the response
+        if 'variants' not in data:
+            logger.warning("No 'variants' key in API response")
+            return {'variants': []}
+            
+        # Validate that variants is a list
+        if not isinstance(data['variants'], list):
+            logger.error(f"'variants' is not a list: {type(data['variants']).__name__}")
+            data['variants'] = []
+            
         return data
         
     except Exception as e:
-        raise    
-
+        logger.error(f"Error in fetch_filtered_variants: {str(e)}")
+        raise
+    
 def fetch_user_requirements(job_id):
     """
     Fetch user requirements/customizations from the backend API
