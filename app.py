@@ -644,10 +644,10 @@ def parse_user_requirements(user_requirements_data, count_field="count"):
                     if result.categories:
                         return result
     
-    return UserRequirement(categories)
-except Exception as e:
-    logger.error(f"Error parsing user requirements: {str(e)}")
-    return UserRequirement({})
+        return UserRequirement(categories)
+    except Exception as e:
+        logger.error(f"Error parsing user requirements: {str(e)}")
+        return UserRequirement({})
     
     
 def get_cuisine_name_by_id(cuisine_id):
