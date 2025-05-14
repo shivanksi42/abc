@@ -9,7 +9,51 @@ import logging
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+import functools
 
+
+def handle_api_error(func):
+    """
+    Decorator for API endpoints to catch and handle all exceptions gracefully
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except requests.RequestException as e:
+            logger.error(f"API Request Error: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Unable to connect to backend service',
+                'details': str(e) if DEBUG else "Backend service unavailable"
+            }), 503
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Parsing Error: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid response format from backend service',
+                'details': str(e) if DEBUG else "Data format error"
+            }), 502
+        except ValueError as e:
+            logger.error(f"Value Error: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid input or processing error',
+                'details': str(e) if DEBUG else "Processing error"
+            }), 400
+        except Exception as e:
+            import traceback
+            error_details = str(e)
+            trace = traceback.format_exc()
+            logger.error(f"Unexpected Error: {error_details}")
+            logger.error(f"Traceback: {trace}")
+            
+            return jsonify({
+                'status': 'error',
+                'message': 'An unexpected error occurred',
+                'details': error_details if DEBUG else "Internal server error"
+            }), 500
+    return wrapper
 
 load_dotenv()
 logging.basicConfig(
@@ -439,56 +483,72 @@ def parse_user_requirements(user_requirements_data, count_field="count"):
     Returns:
         UserRequirement object that can be used by the matcher
     """
-    categories = {}
-
+    try:
+        categories = {}
     
-    if isinstance(user_requirements_data, list) and len(user_requirements_data) > 0:
-        
-        for section in user_requirements_data:
-            if not isinstance(section, dict):
-                continue
-                
-            cat_name = section.get("name", "Uncategorized")
-            cuisines = {}
+        if isinstance(user_requirements_data, list) and len(user_requirements_data) > 0:
             
-            subcategories_by_cuisine = section.get("subcategoriesByCuisine", {})
-            for cuisine_name, subcategory_list in subcategories_by_cuisine.items():
-                cuisine_subcategories = {}
+            for section in user_requirements_data:
+                if not isinstance(section, dict):
+                    continue
+                    
+                cat_name = section.get("name", "Uncategorized")
+                cuisines = {}
                 
-                for subcategory_data in subcategory_list:
-                    subcat_name = subcategory_data.get("name", "General")
+                subcategories_by_cuisine = section.get("subcategoriesByCuisine", {})
+                for cuisine_name, subcategory_list in subcategories_by_cuisine.items():
+                    cuisine_subcategories = {}
                     
-                    item_counts_data = subcategory_data.get(count_field, {})
-                    items = {}
+                    if not isinstance(subcategory_list, list):
+                        continue
+                        
+                    for subcategory_data in subcategory_list:
+                        if not isinstance(subcategory_data, dict):
+                            continue
+                            
+                        subcat_name = subcategory_data.get("name", "General")
+                        
+                        item_counts_data = subcategory_data.get(count_field, {})
+                        items = {}
+                        
+                        if isinstance(item_counts_data, dict):
+                            for item_type, count in item_counts_data.items():
+                                try:
+                                    count_val = int(count) if count else 0
+                                    if count_val > 0:
+                                        items[item_type] = count_val
+                                except (ValueError, TypeError):
+                                    logger.warning(f"Invalid count value for item {item_type}: {count}")
+                                    continue
+                                    
+                        elif isinstance(item_counts_data, list):
+                            for item_data in item_counts_data:
+                                if isinstance(item_data, dict):
+                                    item_type = item_data.get("name", "Unknown")
+                                    try:
+                                        count = int(item_data.get("count", 0))
+                                        if count > 0:
+                                            items[item_type] = count
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"Invalid count value for item {item_type}")
+                                        continue
+                        
+                        if items:
+                            cuisine_subcategories[subcat_name] = Subcategory(subcat_name, items)
                     
-                    if isinstance(item_counts_data, dict):
-                        for item_type, count in item_counts_data.items():
-                            if count > 0:
-                                items[item_type] = count
-                    elif isinstance(item_counts_data, list):
-                        for item_data in item_counts_data:
-                            if isinstance(item_data, dict):
-                                item_type = item_data.get("name", "Unknown")
-                                count = item_data.get("count", 0)
-                                if count > 0:
-                                    items[item_type] = count
-                    
-                    if items:
-                        cuisine_subcategories[subcat_name] = Subcategory(subcat_name, items)
+                    if cuisine_subcategories:
+                        cuisine = Cuisine(cuisine_name, cuisine_subcategories)
+                        if isinstance(item_counts_data, dict):
+                            cuisine.contains_egg = "Egg" in item_counts_data and item_counts_data.get("Egg", 0) > 0
+                        elif isinstance(item_counts_data, list):
+                            cuisine.contains_egg = any(
+                                item.get("name") == "Egg" and item.get("count", 0) > 0
+                                for item in item_counts_data if isinstance(item, dict)
+                            )
+                        cuisines[cuisine_name] = cuisine
                 
-                if cuisine_subcategories:
-                    cuisine = Cuisine(cuisine_name, cuisine_subcategories)
-                    if isinstance(item_counts_data, dict):
-                        cuisine.contains_egg = "Egg" in item_counts_data and item_counts_data.get("Egg", 0) > 0
-                    elif isinstance(item_counts_data, list):
-                        cuisine.contains_egg = any(
-                            item.get("name") == "Egg" and item.get("count", 0) > 0
-                            for item in item_counts_data if isinstance(item, dict)
-                        )
-                    cuisines[cuisine_name] = cuisine
-            
-            if cuisines:
-                categories[cat_name] = Category(cat_name, cuisines)
+                if cuisines:
+                    categories[cat_name] = Category(cat_name, cuisines)
     
     elif isinstance(user_requirements_data, dict):
         if count_field in user_requirements_data:
@@ -585,6 +645,11 @@ def parse_user_requirements(user_requirements_data, count_field="count"):
                         return result
     
     return UserRequirement(categories)
+except Exception as e:
+    logger.error(f"Error parsing user requirements: {str(e)}")
+    return UserRequirement({})
+    
+    
 def get_cuisine_name_by_id(cuisine_id):
     """
     Maps cuisine IDs to cuisine names
@@ -901,11 +966,11 @@ def fetch_filtered_variants(filter_data):
     try:
         url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
         
-        response = requests.post(url, json=filter_data)
+        response = requests.post(url, json=filter_data, timeout=15)  # Add timeout
         
         if response.status_code != 200:
             logger.error(f"Failed API response: {response.status_code} - {response.text}")
-            raise Exception(f"Failed to fetch filtered variants: {response.status_code} - {response.text}")
+            return {'variants': [], 'error': f"Backend API error: {response.status_code}"}
         
         # Check if response is valid JSON
         try:
@@ -913,12 +978,12 @@ def fetch_filtered_variants(filter_data):
         except Exception as e:
             logger.error(f"Failed to parse JSON response: {e}")
             logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
-            raise Exception(f"Invalid JSON response from server: {str(e)}")
+            return {'variants': [], 'error': "Invalid JSON response from server"}
         
         # Validate that the response is a dictionary
         if not isinstance(data, dict):
             logger.error(f"Unexpected response format: {type(data).__name__}")
-            raise Exception(f"Unexpected response format: expected dictionary, got {type(data).__name__}")
+            return {'variants': [], 'error': f"Unexpected response format: expected dictionary, got {type(data).__name__}"}
         
         # Validate that variants exist in the response
         if 'variants' not in data:
@@ -932,196 +997,221 @@ def fetch_filtered_variants(filter_data):
             
         return data
         
+    except requests.exceptions.Timeout:
+        logger.error("Timeout error connecting to backend API")
+        return {'variants': [], 'error': "Backend API request timed out"}
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error to backend API")
+        return {'variants': [], 'error': "Could not connect to backend API"}
     except Exception as e:
         logger.error(f"Error in fetch_filtered_variants: {str(e)}")
-        raise
+        return {'variants': [], 'error': str(e)}
+
     
-def fetch_user_requirements(job_id):
+def fetch_filtered_variants(filter_data):
     """
-    Fetch user requirements/customizations from the backend API
-    Token is no longer required
-    
-    Args:
-        job_id: ID of the job to fetch requirements for
-        
-    Returns:
-        User requirement data
+    Fetch filtered restaurant variants from the backend API
+    Include maxPerson parameter if provided
     """
     try:
-        url = f"{BACKEND_BASE_URL}{USER_REQUIREMENTS_BASE_ENDPOINT}/{job_id}"
+        url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
         
-        response = requests.get(url)
+        response = requests.post(url, json=filter_data, timeout=15)  
         
         if response.status_code != 200:
-            raise Exception(f"Failed to fetch user requirements: {response.status_code} - {response.text}")
+            logger.error(f"Failed API response: {response.status_code} - {response.text}")
+            return {'variants': [], 'error': f"Backend API error: {response.status_code}"}
         
         try:
             data = response.json()
-            
-            # Validate the response is a dictionary
-            if not isinstance(data, dict):
-                logger.error(f"User requirements API returned non-dictionary: {type(data).__name__}")
-                return {"data": {}}
-                
-            return data
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode user requirements JSON: {e}")
-            logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
-            return {"data": {}}
+        except Exception as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.error(f"Response content: {response.text[:200]}...")  
+            return {'variants': [], 'error': "Invalid JSON response from server"}
         
+        if not isinstance(data, dict):
+            logger.error(f"Unexpected response format: {type(data).__name__}")
+            return {'variants': [], 'error': f"Unexpected response format: expected dictionary, got {type(data).__name__}"}
+        
+        if 'variants' not in data:
+            logger.warning("No 'variants' key in API response")
+            return {'variants': []}
+            
+        if not isinstance(data['variants'], list):
+            logger.error(f"'variants' is not a list: {type(data['variants']).__name__}")
+            data['variants'] = []
+            
+        return data
+        
+    except requests.exceptions.Timeout:
+        logger.error("Timeout error connecting to backend API")
+        return {'variants': [], 'error': "Backend API request timed out"}
+    except requests.exceptions.ConnectionError:
+        logger.error("Connection error to backend API")
+        return {'variants': [], 'error': "Could not connect to backend API"}
     except Exception as e:
-        logger.error(f"Error in fetch_user_requirements: {str(e)}")
-        return {"data": {}}
+        logger.error(f"Error in fetch_filtered_variants: {str(e)}")
+        return {'variants': [], 'error': str(e)}
     
 
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
+@handle_api_error  # Apply the error handler decorator
 def match_restaurants_integrated():
     """
     Integrated API endpoint that fetches data from backend APIs 
     and performs matching with updated parser functions
-    Now includes service matching and handles JSON data only
+    Now includes service matching and handles JSON data only with improved error handling
     """
-    try:
-        data = request.json
-        
-        filter_data = data.get('filter_data', {})
-        job_id = data.get('job_id', None)
-        threshold = data.get('threshold', 0.75)
-            
-        if not filter_data:
-            return jsonify({
-                'status': 'error',
-                'message': 'Missing filter_data in request'
-            }), 400
-        
-        if not job_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'Missing job_id in request'
-            }), 400
-        
-        restaurant_packages_data = fetch_filtered_variants(filter_data)
-        
-        # Ensure restaurant_packages_data is a dictionary
-        if not isinstance(restaurant_packages_data, dict):
-            return jsonify({
-                'status': 'error',
-                'message': f'Expected dictionary from fetch_filtered_variants, got {type(restaurant_packages_data).__name__}'
-            }), 500
-
-        adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
-        
-        if not restaurant_packages_data or not restaurant_packages_data.get('variants'):
-            return jsonify({
-                'status': 'success',
-                'message': 'No restaurants found matching your criteria',
-                'matches': [],
-                'total_restaurants': 0,
-                'matched_restaurants': 0,
-                'venue_matches': []
-            })
-       
-        user_requirements_data = fetch_user_requirements(job_id)
-        
-        # Ensure user_requirements_data is a dictionary
-        if not isinstance(user_requirements_data, dict):
-            return jsonify({
-                'status': 'error',
-                'message': f'Expected dictionary from fetch_user_requirements, got {type(user_requirements_data).__name__}'
-            }), 500
-        
-        user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
-        restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
-        
-        service_matcher = ServiceMatcher()
-        
-        user_services = service_matcher.extract_user_services(user_requirements_data)
-        
-        matcher = OptimizedRestaurantMatcher(threshold=threshold)
-        match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
-        
-        venue_heaps = {}
-        simplified_results = []
-        
-        for result in match_results:
-            match_percentage = round(result.overall_match * 100, 2)
-            venue_id = result.venue_id
-            variant_id = result.restaurant_id
-            
-            # Find the original variant data for service matching
-            variant_data = None
-            for variant in restaurant_packages_data.get('variants', []):
-                if isinstance(variant, dict) and variant.get("_id", "") == variant_id:
-                    variant_data = variant
-                    break
-            
-            service_match_result = {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
-            if variant_data and isinstance(variant_data, dict):  # Added check to ensure variant_data is a dictionary
-                try:
-                    venue_services = service_matcher.extract_venue_services(variant_data)
-                    service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
-                except Exception as e:
-                    logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
-                    # Continue with default service_match_result
-            
-            simplified_result = {
-                'variant_id': result.restaurant_id,  
-                'variant_name': result.restaurant_name,
-                'match_percentage': match_percentage,
-                'service_match_percentage': service_match_result["match_percentage"],
-                'price': result.price,
-                'unmet_requirements': result.unmet_requirements,
-                'unmet_services': service_match_result["unmatched_services"],
-                'package_id': result.package_id,
-                'venue_id': venue_id
-            }
-            
-            simplified_results.append(simplified_result)
-
-            if venue_id:
-                if venue_id not in venue_heaps:
-                    venue_heaps[venue_id] = []
-         
-                combined_score = match_percentage * 0.7 + service_match_result["match_percentage"] * 0.3
-                heapq.heappush(venue_heaps[venue_id], (-combined_score, result.restaurant_id, simplified_result))
-        
-        venue_matches = []
-        for venue_id, heap in venue_heaps.items():
-            if heap:
-                best_match = heapq.heappop(heap)
-                
-                venue_matches.append({
-                    'venue_id': venue_id,
-                    'match_percentage': round(best_match[2]['match_percentage'], 2),
-                    'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),
-                    'combined_match_percentage': round(-best_match[0], 2),  
-                    'best_variant_id': best_match[2]['variant_id'],
-                    'best_variant_name': best_match[2]['variant_name']
-                })
-        
-        venue_matches.sort(key=lambda x: x['combined_match_percentage'], reverse=True)
-        
-        return jsonify({
-            'status': 'success',
-            'matches': simplified_results,
-            'venue_matches': venue_matches,
-            'total_variants': len(restaurant_packages),
-            'matched_variants': len(simplified_results)
-        })
+    data = request.json
     
-    except Exception as e:
-        # More detailed error reporting
-        import traceback
-        error_details = str(e)
-        trace = traceback.format_exc()
-        logger.error(f"Error in match_restaurants_integrated: {error_details}")
-        logger.error(f"Traceback: {trace}")
-        
+    # Validate request data
+    if not isinstance(data, dict):
         return jsonify({
             'status': 'error',
-            'message': error_details,
-            'traceback': trace if DEBUG else "Enable DEBUG mode for traceback"
+            'message': 'Invalid request format'
+        }), 400
+    
+    filter_data = data.get('filter_data', {})
+    job_id = data.get('job_id', None)
+    threshold = data.get('threshold', 0.75)
+        
+    if not filter_data:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing filter_data in request'
+        }), 400
+    
+    if not job_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing job_id in request'
+        }), 400
+    
+    restaurant_packages_data = fetch_filtered_variants(filter_data)
+    
+    # Check for errors in the API response
+    if 'error' in restaurant_packages_data:
+        return jsonify({
+            'status': 'error',
+            'message': 'Error fetching restaurant data',
+            'details': restaurant_packages_data.get('error')
+        }), 502
+    
+    # Ensure restaurant_packages_data is a dictionary
+    if not isinstance(restaurant_packages_data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': f'Expected dictionary from fetch_filtered_variants, got {type(restaurant_packages_data).__name__}'
         }), 500
+
+    adapted_restaurant_data = adapt_restaurant_data_updated(restaurant_packages_data)
+    
+    if not restaurant_packages_data or not restaurant_packages_data.get('variants'):
+        return jsonify({
+            'status': 'success',
+            'message': 'No restaurants found matching your criteria',
+            'matches': [],
+            'total_restaurants': 0,
+            'matched_restaurants': 0,
+            'venue_matches': []
+        })
+   
+    user_requirements_data = fetch_user_requirements(job_id)
+    
+    # Check for errors in the user requirements API response
+    if 'error' in user_requirements_data:
+        return jsonify({
+            'status': 'error',
+            'message': 'Error fetching user requirements',
+            'details': user_requirements_data.get('error')
+        }), 502
+    
+    # Ensure user_requirements_data is a dictionary
+    if not isinstance(user_requirements_data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': f'Expected dictionary from fetch_user_requirements, got {type(user_requirements_data).__name__}'
+        }), 500
+    
+    user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
+    restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
+    
+    service_matcher = ServiceMatcher()
+    
+    user_services = service_matcher.extract_user_services(user_requirements_data)
+    
+    matcher = OptimizedRestaurantMatcher(threshold=threshold)
+    match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
+    
+    venue_heaps = {}
+    simplified_results = []
+    
+    for result in match_results:
+        match_percentage = round(result.overall_match * 100, 2)
+        venue_id = result.venue_id
+        variant_id = result.restaurant_id
+        
+        # Find the original variant data for service matching
+        variant_data = None
+        for variant in restaurant_packages_data.get('variants', []):
+            if isinstance(variant, dict) and variant.get("_id", "") == variant_id:
+                variant_data = variant
+                break
+        
+        service_match_result = {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
+        if variant_data and isinstance(variant_data, dict):
+            try:
+                venue_services = service_matcher.extract_venue_services(variant_data)
+                service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
+            except Exception as e:
+                logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
+                # Continue with default service_match_result
+        
+        simplified_result = {
+            'variant_id': result.restaurant_id,  
+            'variant_name': result.restaurant_name,
+            'match_percentage': match_percentage,
+            'service_match_percentage': service_match_result["match_percentage"],
+            'price': result.price,
+            'unmet_requirements': result.unmet_requirements,
+            'unmet_services': service_match_result["unmatched_services"],
+            'package_id': result.package_id,
+            'venue_id': venue_id
+        }
+        
+        simplified_results.append(simplified_result)
+
+        if venue_id:
+            if venue_id not in venue_heaps:
+                venue_heaps[venue_id] = []
+     
+            combined_score = match_percentage * 0.7 + service_match_result["match_percentage"] * 0.3
+            heapq.heappush(venue_heaps[venue_id], (-combined_score, result.restaurant_id, simplified_result))
+    
+    venue_matches = []
+    for venue_id, heap in venue_heaps.items():
+        if heap:
+            best_match = heapq.heappop(heap)
+            
+            venue_matches.append({
+                'venue_id': venue_id,
+                'match_percentage': round(best_match[2]['match_percentage'], 2),
+                'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),
+                'combined_match_percentage': round(-best_match[0], 2),  
+                'best_variant_id': best_match[2]['variant_id'],
+                'best_variant_name': best_match[2]['variant_name']
+            })
+    
+    venue_matches.sort(key=lambda x: x['combined_match_percentage'], reverse=True)
+    
+    return jsonify({
+        'status': 'success',
+        'matches': simplified_results,
+        'venue_matches': venue_matches,
+        'total_variants': len(restaurant_packages),
+        'matched_variants': len(simplified_results)
+    })
+
                                 
 @app.route('/health', methods=['GET'])
 def health_check():
