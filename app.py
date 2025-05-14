@@ -1007,50 +1007,42 @@ def fetch_filtered_variants(filter_data):
         return {'variants': [], 'error': str(e)}
 
     
-def fetch_filtered_variants(filter_data):
+def fetch_user_requirements(job_id):
     """
-    Fetch filtered restaurant variants from the backend API
-    Include maxPerson parameter if provided
+    Fetch user requirements/customizations from the backend API
+    Token is no longer required
+    
+    Args:
+        job_id: ID of the job to fetch requirements for
+        
+    Returns:
+        User requirement data
     """
     try:
-        url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
+        url = f"{BACKEND_BASE_URL}{USER_REQUIREMENTS_BASE_ENDPOINT}/{job_id}"
         
-        response = requests.post(url, json=filter_data, timeout=15)  
+        response = requests.get(url)
         
         if response.status_code != 200:
-            logger.error(f"Failed API response: {response.status_code} - {response.text}")
-            return {'variants': [], 'error': f"Backend API error: {response.status_code}"}
+            raise Exception(f"Failed to fetch user requirements: {response.status_code} - {response.text}")
         
         try:
             data = response.json()
-        except Exception as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(f"Response content: {response.text[:200]}...")  
-            return {'variants': [], 'error': "Invalid JSON response from server"}
-        
-        if not isinstance(data, dict):
-            logger.error(f"Unexpected response format: {type(data).__name__}")
-            return {'variants': [], 'error': f"Unexpected response format: expected dictionary, got {type(data).__name__}"}
-        
-        if 'variants' not in data:
-            logger.warning("No 'variants' key in API response")
-            return {'variants': []}
             
-        if not isinstance(data['variants'], list):
-            logger.error(f"'variants' is not a list: {type(data['variants']).__name__}")
-            data['variants'] = []
-            
-        return data
+            # Validate the response is a dictionary
+            if not isinstance(data, dict):
+                logger.error(f"User requirements API returned non-dictionary: {type(data).__name__}")
+                return {"data": {}}
+                
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode user requirements JSON: {e}")
+            logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
+            return {"data": {}}
         
-    except requests.exceptions.Timeout:
-        logger.error("Timeout error connecting to backend API")
-        return {'variants': [], 'error': "Backend API request timed out"}
-    except requests.exceptions.ConnectionError:
-        logger.error("Connection error to backend API")
-        return {'variants': [], 'error': "Could not connect to backend API"}
     except Exception as e:
-        logger.error(f"Error in fetch_filtered_variants: {str(e)}")
-        return {'variants': [], 'error': str(e)}
+        logger.error(f"Error in fetch_user_requirements: {str(e)}")
+        return {"data": {}}
     
 
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
