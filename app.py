@@ -550,34 +550,61 @@ def parse_user_requirements(user_requirements_data, count_field="count"):
                 if cuisines:
                     categories[cat_name] = Category(cat_name, cuisines)
     
-    elif isinstance(user_requirements_data, dict):
-        if count_field in user_requirements_data:
-            count_data = user_requirements_data.get(count_field, [])
-            
-            if isinstance(count_data, list):
+        elif isinstance(user_requirements_data, dict):
+            if count_field in user_requirements_data:
+                count_data = user_requirements_data.get(count_field, [])
                 
-                for category_count in count_data:
-                    if not isinstance(category_count, dict):
-                        continue
-                        
-                    cat_name = category_count.get("name", "Uncategorized")
-                    counts_data = category_count.get(count_field, {})
+                if isinstance(count_data, list):
                     
+                    for category_count in count_data:
+                        if not isinstance(category_count, dict):
+                            continue
+                            
+                        cat_name = category_count.get("name", "Uncategorized")
+                        counts_data = category_count.get(count_field, {})
+                        
+                        cuisine_name = "General"
+                        subcat_name = "General"
+                        
+                        items = {}
+                        if isinstance(counts_data, dict):
+                            for item_type, count in counts_data.items():
+                                if count > 0:
+                                    items[item_type] = count
+                        elif isinstance(counts_data, list):
+                            for item_data in counts_data:
+                                if isinstance(item_data, dict):
+                                    item_type = item_data.get("name", "Unknown")
+                                    count = item_data.get("count", 0)
+                                    if count > 0:
+                                        items[item_type] = count
+                        
+                        if items:
+                            if cat_name not in categories:
+                                categories[cat_name] = Category(cat_name, {})
+                            
+                            cuisine_subcategories = {subcat_name: Subcategory(subcat_name, items)}
+                            cuisine = Cuisine(cuisine_name, cuisine_subcategories)
+                            
+                            if isinstance(counts_data, dict):
+                                cuisine.contains_egg = "Egg" in counts_data and counts_data.get("Egg", 0) > 0
+                            elif isinstance(counts_data, list):
+                                cuisine.contains_egg = any(
+                                    item.get("name") == "Egg" and item.get("count", 0) > 0
+                                    for item in counts_data if isinstance(item, dict)
+                                )
+                            
+                            categories[cat_name].cuisines[cuisine_name] = cuisine
+                
+                elif isinstance(count_data, dict):
+                    cat_name = "Menu Items"
                     cuisine_name = "General"
                     subcat_name = "General"
                     
                     items = {}
-                    if isinstance(counts_data, dict):
-                        for item_type, count in counts_data.items():
-                            if count > 0:
-                                items[item_type] = count
-                    elif isinstance(counts_data, list):
-                        for item_data in counts_data:
-                            if isinstance(item_data, dict):
-                                item_type = item_data.get("name", "Unknown")
-                                count = item_data.get("count", 0)
-                                if count > 0:
-                                    items[item_type] = count
+                    for item_type, count in count_data.items():
+                        if count > 0:
+                            items[item_type] = count
                     
                     if items:
                         if cat_name not in categories:
@@ -585,70 +612,42 @@ def parse_user_requirements(user_requirements_data, count_field="count"):
                         
                         cuisine_subcategories = {subcat_name: Subcategory(subcat_name, items)}
                         cuisine = Cuisine(cuisine_name, cuisine_subcategories)
-                        
-                        if isinstance(counts_data, dict):
-                            cuisine.contains_egg = "Egg" in counts_data and counts_data.get("Egg", 0) > 0
-                        elif isinstance(counts_data, list):
-                            cuisine.contains_egg = any(
-                                item.get("name") == "Egg" and item.get("count", 0) > 0
-                                for item in counts_data if isinstance(item, dict)
-                            )
+                        cuisine.contains_egg = "Egg" in count_data and count_data.get("Egg", 0) > 0
                         
                         categories[cat_name].cuisines[cuisine_name] = cuisine
             
-            elif isinstance(count_data, dict):
-                cat_name = "Menu Items"
-                cuisine_name = "General"
-                subcat_name = "General"
-                
-                items = {}
-                for item_type, count in count_data.items():
-                    if count > 0:
-                        items[item_type] = count
-                
-                if items:
-                    if cat_name not in categories:
-                        categories[cat_name] = Category(cat_name, {})
-                    
-                    cuisine_subcategories = {subcat_name: Subcategory(subcat_name, items)}
-                    cuisine = Cuisine(cuisine_name, cuisine_subcategories)
-                    cuisine.contains_egg = "Egg" in count_data and count_data.get("Egg", 0) > 0
-                    
-                    categories[cat_name].cuisines[cuisine_name] = cuisine
+            elif "data" in user_requirements_data:
+                if "menuSections" in user_requirements_data["data"]:
+                    return parse_user_requirements(user_requirements_data["data"]["menuSections"], count_field)
+                elif count_field in user_requirements_data["data"]:
+                    return parse_user_requirements({"count_field": user_requirements_data["data"][count_field]}, count_field)
+                for key, value in user_requirements_data["data"].items():
+                    if isinstance(value, list) and len(value) > 0:
+                        result = parse_user_requirements(value, count_field)
+                        if result.categories:
+                            return result
+                    elif isinstance(value, dict):
+                        result = parse_user_requirements(value, count_field)
+                        if result.categories:
+                            return result
+            
+            else:
+                for key, value in user_requirements_data.items():
+                    if key == count_field:
+                        return parse_user_requirements({count_field: value}, count_field)
+                    elif isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict) and "name" in value[0]:
+                        return parse_user_requirements(value, count_field)
+                    elif isinstance(value, dict) and count_field in value:
+                        return parse_user_requirements({count_field: value[count_field]}, count_field)
+                    elif isinstance(value, dict):
+                        result = parse_user_requirements(value, count_field)
+                        if result.categories:
+                            return result
         
-        elif "data" in user_requirements_data:
-            if "menuSections" in user_requirements_data["data"]:
-                return parse_user_requirements(user_requirements_data["data"]["menuSections"], count_field)
-            elif count_field in user_requirements_data["data"]:
-                return parse_user_requirements({"count_field": user_requirements_data["data"][count_field]}, count_field)
-            for key, value in user_requirements_data["data"].items():
-                if isinstance(value, list) and len(value) > 0:
-                    result = parse_user_requirements(value, count_field)
-                    if result.categories:
-                        return result
-                elif isinstance(value, dict):
-                    result = parse_user_requirements(value, count_field)
-                    if result.categories:
-                        return result
-        
-        else:
-            for key, value in user_requirements_data.items():
-                if key == count_field:
-                    return parse_user_requirements({count_field: value}, count_field)
-                elif isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict) and "name" in value[0]:
-                    return parse_user_requirements(value, count_field)
-                elif isinstance(value, dict) and count_field in value:
-                    return parse_user_requirements({count_field: value[count_field]}, count_field)
-                elif isinstance(value, dict):
-                    result = parse_user_requirements(value, count_field)
-                    if result.categories:
-                        return result
-    
         return UserRequirement(categories)
     except Exception as e:
         logger.error(f"Error parsing user requirements: {str(e)}")
-        return UserRequirement({})
-    
+        return UserRequirement({})    
     
 def get_cuisine_name_by_id(cuisine_id):
     """
