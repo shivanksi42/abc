@@ -66,7 +66,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL', 'https://6041-2405-201-5004-7027-35e5-eaef-49e2-ccf7.ngrok-free.app')
+BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL', 'https://api.tracevenue.com/')
 FILTERED_VARIANTS_ENDPOINT = os.getenv('FILTERED_VARIANTS_ENDPOINT', '/api/v1/traceVenue/variant/filteredVariants')
 USER_REQUIREMENTS_BASE_ENDPOINT = os.getenv('USER_REQUIREMENTS_BASE_ENDPOINT', '/api/v1/traceVenue/jobs')
 PORT = int(os.getenv('PORT', 5001))
