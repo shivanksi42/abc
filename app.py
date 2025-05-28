@@ -228,17 +228,16 @@ class ServiceMatcher:
             if service_name in venue_services:
                 venue_service = venue_services[service_name]
                 
-                # Check if the payment type matches (free vs paid)
+                
                 payment_match = (user_service["is_paid"] == venue_service["is_paid"])
                 
-                # For variant and variant_type, check if they exist and match
+                
                 variant_match = (not user_service["variant"] or 
                                 user_service["variant"].lower() == venue_service["variant"].lower())
                 
                 variant_type_match = (not user_service["variant_type"] or 
                                      user_service["variant_type"].lower() == venue_service["variant_type"].lower())
                 
-                # If basic service is available and either payment, variant or variant_type match
                 if payment_match or variant_match or variant_type_match:
                     matched_count += 1
                     matched_services.append({
