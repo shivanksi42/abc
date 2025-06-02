@@ -66,7 +66,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL', 'https://6041-2405-201-5004-7027-35e5-eaef-49e2-ccf7.ngrok-free.app')
+BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL')
 FILTERED_VARIANTS_ENDPOINT = os.getenv('FILTERED_VARIANTS_ENDPOINT', '/api/v1/traceVenue/variant/filteredVariants')
 USER_REQUIREMENTS_BASE_ENDPOINT = os.getenv('USER_REQUIREMENTS_BASE_ENDPOINT', '/api/v1/traceVenue/jobs')
 PORT = int(os.getenv('PORT', 5001))
@@ -964,7 +964,7 @@ def fetch_filtered_variants(filter_data):
     try:
         url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
         
-        response = requests.post(url, json=filter_data, timeout=15)  # Add timeout
+        response = requests.post(url, json=filter_data, timeout=120)  
         
         if response.status_code != 200:
             logger.error(f"Failed API response: {response.status_code} - {response.text}")
@@ -1137,11 +1137,10 @@ def match_restaurants_integrated():
     simplified_results = []
     
     for result in match_results:
-        match_percentage = round(result.overall_match * 100, 2)
+        match_percentage = round(result.overall_match * 100, 2)  
         venue_id = result.venue_id
         variant_id = result.restaurant_id
         
-        # Find the original variant data for service matching
         variant_data = None
         for variant in restaurant_packages_data.get('variants', []):
             if isinstance(variant, dict) and variant.get("_id", "") == variant_id:
@@ -1155,13 +1154,12 @@ def match_restaurants_integrated():
                 service_match_result = service_matcher.calculate_service_match(venue_services, user_services)
             except Exception as e:
                 logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
-                # Continue with default service_match_result
         
         simplified_result = {
             'variant_id': result.restaurant_id,  
             'variant_name': result.restaurant_name,
-            'match_percentage': match_percentage,
-            'service_match_percentage': service_match_result["match_percentage"],
+            'match_percentage': match_percentage,  
+            'service_match_percentage': service_match_result["match_percentage"],  
             'price': result.price,
             'unmet_requirements': result.unmet_requirements,
             'unmet_services': service_match_result["unmatched_services"],
@@ -1174,10 +1172,10 @@ def match_restaurants_integrated():
         if venue_id:
             if venue_id not in venue_heaps:
                 venue_heaps[venue_id] = []
-     
-            combined_score = match_percentage * 0.7 + service_match_result["match_percentage"] * 0.3
-            heapq.heappush(venue_heaps[venue_id], (-combined_score, result.restaurant_id, simplified_result))
     
+            heapq.heappush(venue_heaps[venue_id], (-match_percentage, result.restaurant_id, simplified_result))
+    
+    venue_matches = []
     venue_matches = []
     for venue_id, heap in venue_heaps.items():
         if heap:
@@ -1185,14 +1183,13 @@ def match_restaurants_integrated():
             
             venue_matches.append({
                 'venue_id': venue_id,
-                'match_percentage': round(best_match[2]['match_percentage'], 2),
-                'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),
-                'combined_match_percentage': round(-best_match[0], 2),  
+                'match_percentage': round(best_match[2]['match_percentage'], 2),  # Menu-only percentage
+                'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),  # Service-only percentage
                 'best_variant_id': best_match[2]['variant_id'],
                 'best_variant_name': best_match[2]['variant_name']
             })
     
-    venue_matches.sort(key=lambda x: x['combined_match_percentage'], reverse=True)
+    venue_matches.sort(key=lambda x: x['match_percentage'], reverse=True)
     
     return jsonify({
         'status': 'success',
