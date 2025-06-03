@@ -315,7 +315,8 @@ class MatchResult:
                  overall_match: float, category_matches: Dict[str, float],
                  unmet_requirements: List[Dict[str, Any]], price: float, rating: float, 
                  package_id: str = "", venue_id: str = "",
-                 service_match: Dict[str, Any] = None):
+                 service_match: Dict[str, Any] = None,
+                 over_100_categories: Dict[str, Any] = None):  
         self.restaurant_id = restaurant_id  
         self.restaurant_name = restaurant_name
         self.overall_match = overall_match
@@ -326,6 +327,7 @@ class MatchResult:
         self.package_id = package_id
         self.venue_id = venue_id
         self.service_match = service_match or {"match_percentage": 100.0, "matched_services": [], "unmatched_services": []}
+        self.over_100_categories = over_100_categories or {}  
     
     def to_dict(self):
         """Convert MatchResult to dictionary for JSON serialization"""
@@ -338,6 +340,7 @@ class MatchResult:
             "category_matches": {k: round(v * 100, 2) for k, v in self.category_matches.items()}, 
             "unmet_requirements": self.unmet_requirements,
             "unmet_services": self.service_match.get("unmatched_services", []),
+            "over_100_categories": self.over_100_categories,  
             "price": self.price,
             "rating": self.rating,
             "package_id": self.package_id,
@@ -384,18 +387,18 @@ class OptimizedRestaurantMatcher:
         matched_items = 0
         category_matches = defaultdict(float)
         category_totals = defaultdict(int)
+        category_restaurant_totals = defaultdict(int)  
         unmet_requirements = []
+        over_100_categories = {}  
         
         for key, user_count in flat_user_req.items():
             rest_count = flat_restaurant.get(key, 0)
-            
             
             cat_name, cuisine_name, subcat_name, item_type = key.split('|')
             
             if rest_count >= user_count:
                 matched_items += user_count
                 item_match = 1.0
-                
             else:
                 matched_items += rest_count
                 item_match = rest_count / user_count
@@ -415,61 +418,73 @@ class OptimizedRestaurantMatcher:
             
             category_key = cat_name
             category_totals[category_key] += user_count
+            category_restaurant_totals[category_key] += rest_count  
             category_matches[category_key] += item_match * user_count
             
             cuisine_key = f"{cat_name}|{cuisine_name}"
             category_totals[cuisine_key] += user_count
+            category_restaurant_totals[cuisine_key] += rest_count  
             category_matches[cuisine_key] += item_match * user_count
             
             subcat_key = f"{cat_name}|{cuisine_name}|{subcat_name}"
             category_totals[subcat_key] += user_count
+            category_restaurant_totals[subcat_key] += rest_count  
             category_matches[subcat_key] += item_match * user_count
         
         for key in category_matches:
             if category_totals[key] > 0:
                 category_matches[key] = category_matches[key] / category_totals[key]
+                
+                if category_restaurant_totals[key] > category_totals[key]:
+                    actual_percentage = (category_restaurant_totals[key] / category_totals[key]) * 100
+                    over_100_categories[key] = {
+                        "category_name": key,
+                        "user_requested": category_totals[key],
+                        "restaurant_offers": category_restaurant_totals[key],
+                        "match_percentage": round(actual_percentage, 2),
+                        "additional_items": category_restaurant_totals[key] - category_totals[key]
+                    }
         
         overall_match = matched_items / total_user_items if total_user_items > 0 else 0
         
-        
-        return overall_match, dict(category_matches), unmet_requirements
+        return overall_match, dict(category_matches), unmet_requirements, over_100_categories
     
     def score_restaurants(self, user_req, restaurant_packages):
-            """Score and rank restaurant packages against user requirements"""
-            flat_user_req, total_user_items = self.flatten_requirements(user_req)
-    
-            all_matches = []
-            
-            for restaurant in restaurant_packages:
-                flat_restaurant = self.flatten_restaurant(restaurant)
-                
-                overall_match, category_matches, unmet_requirements = self.calculate_match(
-                    flat_user_req, flat_restaurant, total_user_items
-                )
-                
-                venue_id = getattr(restaurant, 'venue_id', "")
-                
-                match_result = MatchResult(
-                    restaurant_id=restaurant.id,
-                    restaurant_name=restaurant.name,
-                    overall_match=overall_match,
-                    category_matches=category_matches,
-                    unmet_requirements=unmet_requirements,
-                    price=restaurant.price,
-                    rating=restaurant.rating,
-                    package_id=restaurant.package_id,
-                    venue_id=venue_id  
-                )
-                
-                all_matches.append((overall_match, restaurant.id, match_result))
-            
-            results = []
-            sorted_matches = sorted(all_matches, key=lambda x: x[0], reverse=True)
-            for _, _, match_result in sorted_matches:
-                results.append(match_result)
-            
-            return results
+        """Score and rank restaurant packages against user requirements"""
+        flat_user_req, total_user_items = self.flatten_requirements(user_req)
 
+        all_matches = []
+        
+        for restaurant in restaurant_packages:
+            flat_restaurant = self.flatten_restaurant(restaurant)
+            
+            overall_match, category_matches, unmet_requirements, over_100_categories = self.calculate_match(
+                flat_user_req, flat_restaurant, total_user_items
+            )
+            
+            venue_id = getattr(restaurant, 'venue_id', "")
+            
+            match_result = MatchResult(
+                restaurant_id=restaurant.id,
+                restaurant_name=restaurant.name,
+                overall_match=overall_match,
+                category_matches=category_matches,
+                unmet_requirements=unmet_requirements,
+                price=restaurant.price,
+                rating=restaurant.rating,
+                package_id=restaurant.package_id,
+                venue_id=venue_id,
+                over_100_categories=over_100_categories  
+            )
+            
+            all_matches.append((overall_match, restaurant.id, match_result))
+        
+        results = []
+        sorted_matches = sorted(all_matches, key=lambda x: x[0], reverse=True)
+        for _, _, match_result in sorted_matches:
+            results.append(match_result)
+        
+        return results
 def parse_user_requirements(user_requirements_data, count_field="count"):
     """Convert API JSON data to UserRequirement object
     Handles both menuSections format and availableMenuCount/count format
@@ -1036,7 +1051,7 @@ def fetch_user_requirements(job_id):
             return data
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode user requirements JSON: {e}")
-            logger.error(f"Response content: {response.text[:200]}...")  # Log first 200 chars
+            logger.error(f"Response content: {response.text[:200]}...")  
             return {"data": {}}
         
     except Exception as e:
@@ -1045,7 +1060,7 @@ def fetch_user_requirements(job_id):
     
 
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
-@handle_api_error  # Apply the error handler decorator
+@handle_api_error  
 def match_restaurants_integrated():
     """
     Integrated API endpoint that fetches data from backend APIs 
@@ -1054,7 +1069,7 @@ def match_restaurants_integrated():
     """
     data = request.json
     
-    # Validate request data
+
     if not isinstance(data, dict):
         return jsonify({
             'status': 'error',
@@ -1156,16 +1171,17 @@ def match_restaurants_integrated():
                 logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
         
         simplified_result = {
-            'variant_id': result.restaurant_id,  
-            'variant_name': result.restaurant_name,
-            'match_percentage': match_percentage,  
-            'service_match_percentage': service_match_result["match_percentage"],  
-            'price': result.price,
-            'unmet_requirements': result.unmet_requirements,
-            'unmet_services': service_match_result["unmatched_services"],
-            'package_id': result.package_id,
-            'venue_id': venue_id
-        }
+        'variant_id': result.restaurant_id,  
+        'variant_name': result.restaurant_name,
+        'match_percentage': match_percentage,  
+        'service_match_percentage': service_match_result["match_percentage"],  
+        'price': result.price,
+        'unmet_requirements': result.unmet_requirements,
+        'unmet_services': service_match_result["unmatched_services"],
+        'over_100_categories': result.over_100_categories,  # NEW field
+        'package_id': result.package_id,
+        'venue_id': venue_id
+    }
         
         simplified_results.append(simplified_result)
 
@@ -1183,8 +1199,8 @@ def match_restaurants_integrated():
             
             venue_matches.append({
                 'venue_id': venue_id,
-                'match_percentage': round(best_match[2]['match_percentage'], 2),  # Menu-only percentage
-                'service_match_percentage': round(best_match[2]['service_match_percentage'], 2),  # Service-only percentage
+                'match_percentage': round(best_match[2]['match_percentage'], 2), 
+                'service_match_percentage': round(best_match[2]['service_match_percentage'], 2), 
                 'best_variant_id': best_match[2]['variant_id'],
                 'best_variant_name': best_match[2]['variant_name']
             })
