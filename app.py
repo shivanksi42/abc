@@ -416,13 +416,11 @@ class OptimizedRestaurantMatcher:
                         "message": f"Insufficient {item_type} in {subcat_name}: need {user_count}, have {rest_count}"
                     })
             
-            # Only track top-level categories for over_100_categories
-            category_key = cat_name  # Only use the main category name
+            category_key = cat_name
             category_totals[category_key] += user_count
-            category_restaurant_totals[category_key] += rest_count  
+            category_restaurant_totals[category_key] += rest_count
             category_matches[category_key] += item_match * user_count
             
-            # Keep the nested structure for detailed matching
             cuisine_key = f"{cat_name}|{cuisine_name}"
             category_totals[cuisine_key] += user_count
             category_restaurant_totals[cuisine_key] += rest_count  
@@ -433,22 +431,15 @@ class OptimizedRestaurantMatcher:
             category_restaurant_totals[subcat_key] += rest_count  
             category_matches[subcat_key] += item_match * user_count
         
-        for key in category_matches:
-            if category_totals[key] > 0:
-                category_matches[key] = category_matches[key] / category_totals[key]
-        
-        # Handle additional items from restaurant that user didn't request
         for key, rest_count in flat_restaurant.items():
             if key not in flat_user_req and rest_count > 0:
                 cat_name, cuisine_name, subcat_name, item_type = key.split('|')
                 
-                # Only track top-level categories
                 category_key = cat_name
                 if category_key not in category_restaurant_totals:
                     category_restaurant_totals[category_key] = 0
                 category_restaurant_totals[category_key] += rest_count
                 
-                # Keep nested tracking for internal processing
                 cuisine_key = f"{cat_name}|{cuisine_name}"
                 if cuisine_key not in category_restaurant_totals:
                     category_restaurant_totals[cuisine_key] = 0
@@ -459,32 +450,25 @@ class OptimizedRestaurantMatcher:
                     category_restaurant_totals[subcat_key] = 0
                 category_restaurant_totals[subcat_key] += rest_count
         
-        # Build over_100_categories with only top-level categories (no | in the key)
-        for key in category_restaurant_totals:
-            # Only include top-level categories (those without '|')
+        for key in category_matches:
+            if category_totals[key] > 0:
+                category_matches[key] = category_matches[key] / category_totals[key]
+        
+        for key in category_totals:  
             if '|' not in key:
                 user_total = category_totals.get(key, 0)
-                rest_total = category_restaurant_totals[key]
+                rest_total = category_restaurant_totals.get(key, 0)
                 
-                if user_total > 0 and rest_total > user_total:
-                    actual_percentage = (rest_total / user_total) * 100
-                    over_100_categories[key] = {
-                        "category_name": key,
-                        "user_requested": user_total,
-                        "restaurant_offers": rest_total,
-                        "match_percentage": round(actual_percentage, 2),
-                        "additional_items": rest_total - user_total
-                    }
-                elif user_total == 0 and rest_total > 0:
-                    # Use a very high number instead of string to avoid type issues
-                    over_100_categories[key] = {
-                        "category_name": key,
-                        "user_requested": 0,
-                        "restaurant_offers": rest_total,
-                        "match_percentage": 9999,  # Use high number instead of string
-                        "additional_items": rest_total,
-                        "is_additional_by_restaurant": True  # Add flag to identify this case
-                    }
+                if user_total > 0:
+                    if rest_total > user_total:
+                        actual_percentage = (rest_total / user_total) * 100
+                        over_100_categories[key] = {
+                            "category_name": key,
+                            "user_requested": user_total,
+                            "restaurant_offers": rest_total,
+                            "match_percentage": round(actual_percentage, 2),
+                            "additional_items": rest_total - user_total
+                        }
         
         overall_match = matched_items / total_user_items if total_user_items > 0 else 0
         
