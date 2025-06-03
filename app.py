@@ -401,7 +401,7 @@ class OptimizedRestaurantMatcher:
                 item_match = 1.0
             else:
                 matched_items += rest_count
-                item_match = rest_count / user_count
+                item_match = rest_count / user_count if user_count > 0 else 0
                 
                 if rest_count < user_count:
                     unmet_requirements.append({
@@ -445,10 +445,52 @@ class OptimizedRestaurantMatcher:
                         "additional_items": category_restaurant_totals[key] - category_totals[key]
                     }
         
+
+        for key, rest_count in flat_restaurant.items():
+            if key not in flat_user_req and rest_count > 0:
+                cat_name, cuisine_name, subcat_name, item_type = key.split('|')
+                
+                category_key = cat_name
+                if category_key not in category_restaurant_totals:
+                    category_restaurant_totals[category_key] = 0
+                category_restaurant_totals[category_key] += rest_count
+                
+                cuisine_key = f"{cat_name}|{cuisine_name}"
+                if cuisine_key not in category_restaurant_totals:
+                    category_restaurant_totals[cuisine_key] = 0
+                category_restaurant_totals[cuisine_key] += rest_count
+                
+                subcat_key = f"{cat_name}|{cuisine_name}|{subcat_name}"
+                if subcat_key not in category_restaurant_totals:
+                    category_restaurant_totals[subcat_key] = 0
+                category_restaurant_totals[subcat_key] += rest_count
+        
+        for key in category_restaurant_totals:
+            user_total = category_totals.get(key, 0)
+            rest_total = category_restaurant_totals[key]
+            
+            if user_total > 0 and rest_total > user_total:
+                actual_percentage = (rest_total / user_total) * 100
+                over_100_categories[key] = {
+                    "category_name": key,
+                    "user_requested": user_total,
+                    "restaurant_offers": rest_total,
+                    "match_percentage": round(actual_percentage, 2),
+                    "additional_items": rest_total - user_total
+                }
+            elif user_total == 0 and rest_total > 0:
+                over_100_categories[key] = {
+                    "category_name": key,
+                    "user_requested": 0,
+                    "restaurant_offers": rest_total,
+                    "match_percentage": "∞",  
+                    "additional_items": rest_total
+                }
+        
         overall_match = matched_items / total_user_items if total_user_items > 0 else 0
         
         return overall_match, dict(category_matches), unmet_requirements, over_100_categories
-    
+
     def score_restaurants(self, user_req, restaurant_packages):
         """Score and rank restaurant packages against user requirements"""
         flat_user_req, total_user_items = self.flatten_requirements(user_req)
