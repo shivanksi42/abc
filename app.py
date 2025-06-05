@@ -66,14 +66,13 @@ app = Flask(__name__)
 CORS(app)
 
 
-BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL')
+BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL',"https://api.staging.tracevenue.com")
 FILTERED_VARIANTS_ENDPOINT = os.getenv('FILTERED_VARIANTS_ENDPOINT', '/api/v1/traceVenue/variant/filteredVariants')
 USER_REQUIREMENTS_BASE_ENDPOINT = os.getenv('USER_REQUIREMENTS_BASE_ENDPOINT', '/api/v1/traceVenue/jobs')
 PORT = int(os.getenv('PORT', 5001))
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
-# Set logging level based on environment variable
 logging_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
 logger.setLevel(logging_level)
 
@@ -511,9 +510,9 @@ class OptimizedRestaurantMatcher:
         
         return results
     
-
 class ItemPopularityAnalyzer:
     """
+    Enhanced version that handles various data structures more robustly
     Efficiently calculates item popularity across restaurant variants
     Time Complexity: O(n*m) where n = variants, m = avg items per variant
     Space Complexity: O(k) where k = unique items
@@ -522,6 +521,7 @@ class ItemPopularityAnalyzer:
     def __init__(self):
         self.item_stats = {}
         self.total_variants = 0
+        self.debug_info = []  # For debugging data extraction issues
     
     def analyze_variants(self, variants_data):
         """
@@ -534,108 +534,207 @@ class ItemPopularityAnalyzer:
             Dictionary with item statistics and popularity percentages
         """
         self.item_stats = {}
+        self.debug_info = []
         self.total_variants = len(variants_data)
         
         if self.total_variants == 0:
-            return {"items": [], "total_variants": 0}
+            return {"items": [], "total_variants": 0, "debug_info": ["No variants provided"]}
         
-        for variant in variants_data:
+        variants_processed = 0
+        
+        for i, variant in enumerate(variants_data):
             if not isinstance(variant, dict):
+                self.debug_info.append(f"Variant {i}: Not a dictionary - {type(variant)}")
                 continue
                 
             variant_items = self._extract_items_from_variant(variant)
             
-            for item_key, item_data in variant_items.items():
-                if item_key not in self.item_stats:
-                    self.item_stats[item_key] = {
-                        "count": 0,
-                        "total_quantity": 0,
-                        "item_name": item_data["name"],
-                        "category": item_data["category"],
-                        "cuisine": item_data["cuisine"],
-                        "subcategory": item_data["subcategory"]
-                    }
-                
-                self.item_stats[item_key]["count"] += 1
-                self.item_stats[item_key]["total_quantity"] += item_data["quantity"]
+            if variant_items:
+                variants_processed += 1
+                for item_key, item_data in variant_items.items():
+                    if item_key not in self.item_stats:
+                        self.item_stats[item_key] = {
+                            "count": 0,
+                            "total_quantity": 0,
+                            "item_name": item_data["name"],
+                            "category": item_data["category"],
+                            "cuisine": item_data["cuisine"],
+                            "subcategory": item_data["subcategory"]
+                        }
+                    
+                    self.item_stats[item_key]["count"] += 1
+                    self.item_stats[item_key]["total_quantity"] += item_data["quantity"]
+            else:
+                variant_id = variant.get("_id", f"variant_{i}")
+                self.debug_info.append(f"Variant {variant_id}: No items extracted")
+        
+        self.debug_info.append(f"Processed {variants_processed} out of {self.total_variants} variants")
         
         return self._prepare_popularity_response()
     
     def _extract_items_from_variant(self, variant):
         """
-        Extract all items from a single variant
-        Handles both availableMenuCount and menuSections formats
-        
-        Returns:
-            Dictionary of items with their details
+        Enhanced extraction that handles multiple data structures
         """
         variant_items = {}
+        variant_id = variant.get("_id", "unknown")
         
-        available_menu_count = variant.get("availableMenuCount")
-        if available_menu_count:
-            self._process_menu_count_data(available_menu_count, variant_items)
-        
-        menu_sections = variant.get("menuSections", [])
-        if isinstance(menu_sections, list):
-            for section in menu_sections:
-                if isinstance(section, dict):
-                    section_name = section.get("name", "General")
-                    
-                    subcategories_by_cuisine = section.get("subcategoriesByCuisine", {})
-                    for cuisine_name, subcategories in subcategories_by_cuisine.items():
-                        if isinstance(subcategories, list):
-                            for subcat in subcategories:
-                                if isinstance(subcat, dict):
-                                    subcat_name = subcat.get("name", "General")
-                                    counts = subcat.get("availableMenuCount", subcat.get("count", {}))
-                                    
-                                    self._process_item_counts(
-                                        counts, variant_items, 
-                                        section_name, cuisine_name, subcat_name
-                                    )
-                    
-                    section_counts = section.get("availableMenuCount", section.get("count", {}))
-                    if section_counts:
-                        self._process_item_counts(
-                            section_counts, variant_items,
-                            section_name, "General", "General"
-                        )
+        try:
+            # Method 1: Direct availableMenuCount
+            if "availableMenuCount" in variant:
+                self._process_available_menu_count(variant["availableMenuCount"], variant_items, variant_id)
+            
+            # Method 2: menuSections structure
+            if "menuSections" in variant and isinstance(variant["menuSections"], list):
+                for section in variant["menuSections"]:
+                    if isinstance(section, dict):
+                        self._process_menu_section(section, variant_items, variant_id)
+            
+            # Method 3: Nested data structure
+            if "data" in variant and isinstance(variant["data"], dict):
+                data = variant["data"]
+                
+                if "availableMenuCount" in data:
+                    self._process_available_menu_count(data["availableMenuCount"], variant_items, variant_id)
+                
+                if "menuSections" in data and isinstance(data["menuSections"], list):
+                    for section in data["menuSections"]:
+                        if isinstance(section, dict):
+                            self._process_menu_section(section, variant_items, variant_id)
+            
+            # Method 4: Direct count field (fallback)
+            if "count" in variant:
+                self._process_count_data(variant["count"], variant_items, variant_id, "General", "General", "General")
+            
+            # Log what we found for this variant
+            if variant_items:
+                self.debug_info.append(f"Variant {variant_id}: Found {len(variant_items)} unique items")
+            else:
+                # Log the structure for debugging
+                keys = list(variant.keys())[:5]  # First 5 keys
+                self.debug_info.append(f"Variant {variant_id}: No items found. Keys: {keys}")
+                
+        except Exception as e:
+            self.debug_info.append(f"Variant {variant_id}: Error during extraction - {str(e)}")
         
         return variant_items
     
-    def _process_menu_count_data(self, menu_count_data, variant_items, 
-                                category="General", cuisine="General", subcategory="General"):
-        """Process menu count data in various formats"""
+    def _process_available_menu_count(self, menu_count_data, variant_items, variant_id):
+        """Process availableMenuCount data in various formats"""
         if isinstance(menu_count_data, dict):
-            self._process_item_counts(menu_count_data, variant_items, category, cuisine, subcategory)
+            # Direct dictionary of items
+            for item_name, count in menu_count_data.items():
+                if isinstance(count, (int, float)) and count > 0:
+                    self._add_item_to_stats(
+                        item_name, count, variant_items,
+                        "Menu Items", "General", "General"
+                    )
+                elif isinstance(count, dict):
+                    # Nested structure - process recursively
+                    self._process_nested_count_structure(item_name, count, variant_items, "Menu Items", "General")
+        
         elif isinstance(menu_count_data, list):
+            # List of menu sections or items
             for item in menu_count_data:
                 if isinstance(item, dict):
-                    if "name" in item:
+                    if "name" in item and "count" in item:
+                        # Item with name and count
                         item_name = item.get("name")
                         count = item.get("count", 0)
-                        if count > 0:
+                        if isinstance(count, (int, float)) and count > 0:
                             self._add_item_to_stats(
                                 item_name, count, variant_items,
-                                category, cuisine, subcategory
+                                "Menu Items", "General", "General"
                             )
                     else:
-                        self._process_menu_count_data(item, variant_items, category, cuisine, subcategory)
+                        # Might be a section - process as menu section
+                        self._process_menu_section(item, variant_items, variant_id)
     
-    def _process_item_counts(self, counts_dict, variant_items, category, cuisine, subcategory):
-        """Process a dictionary of item counts"""
-        if not isinstance(counts_dict, dict):
-            return
-            
-        for item_name, count in counts_dict.items():
-            if isinstance(count, (int, float)) and count > 0:
-                self._add_item_to_stats(
-                    item_name, count, variant_items,
-                    category, cuisine, subcategory
-                )
+    def _process_menu_section(self, section, variant_items, variant_id):
+        """Process a menu section structure"""
+        section_name = section.get("name", "General")
+        
+        # Check for subcategoriesByCuisine
+        if "subcategoriesByCuisine" in section:
+            subcategories_by_cuisine = section["subcategoriesByCuisine"]
+            if isinstance(subcategories_by_cuisine, dict):
+                for cuisine_name, subcategories in subcategories_by_cuisine.items():
+                    if isinstance(subcategories, list):
+                        for subcat in subcategories:
+                            if isinstance(subcat, dict):
+                                subcat_name = subcat.get("name", "General")
+                                
+                                # Check for availableMenuCount or count in subcategory
+                                count_data = subcat.get("availableMenuCount") or subcat.get("count")
+                                if count_data:
+                                    self._process_count_data(
+                                        count_data, variant_items, variant_id,
+                                        section_name, cuisine_name, subcat_name
+                                    )
+        
+        # Check for direct availableMenuCount in section
+        if "availableMenuCount" in section:
+            self._process_count_data(
+                section["availableMenuCount"], variant_items, variant_id,
+                section_name, "General", "General"
+            )
+        
+        # Check for direct count in section
+        if "count" in section:
+            self._process_count_data(
+                section["count"], variant_items, variant_id,
+                section_name, "General", "General"
+            )
+    
+    def _process_count_data(self, count_data, variant_items, variant_id, category, cuisine, subcategory):
+        """Process count data in various formats"""
+        if isinstance(count_data, dict):
+            for item_name, count in count_data.items():
+                if isinstance(count, (int, float)) and count > 0:
+                    self._add_item_to_stats(
+                        item_name, count, variant_items,
+                        category, cuisine, subcategory
+                    )
+                elif isinstance(count, dict):
+                    self._process_nested_count_structure(item_name, count, variant_items, category, cuisine)
+                
+        elif isinstance(count_data, list):
+            for item in count_data:
+                if isinstance(item, dict):
+                    item_name = item.get("name", "Unknown")
+                    count = item.get("count", 0)
+                    if isinstance(count, (int, float)) and count > 0:
+                        self._add_item_to_stats(
+                            item_name, count, variant_items,
+                            category, cuisine, subcategory
+                        )
+    
+    def _process_nested_count_structure(self, parent_name, count_structure, variant_items, category, cuisine):
+        """Handle nested count structures"""
+        if isinstance(count_structure, dict):
+            if "count" in count_structure:
+                # Has a count field
+                count = count_structure.get("count", 0)
+                if isinstance(count, (int, float)) and count > 0:
+                    self._add_item_to_stats(
+                        parent_name, count, variant_items,
+                        category, cuisine, "General"
+                    )
+            else:
+                # Process as nested items
+                for sub_item, sub_count in count_structure.items():
+                    if isinstance(sub_count, (int, float)) and sub_count > 0:
+                        item_name = f"{parent_name}_{sub_item}"
+                        self._add_item_to_stats(
+                            item_name, sub_count, variant_items,
+                            category, cuisine, "General"
+                        )
     
     def _add_item_to_stats(self, item_name, quantity, variant_items, category, cuisine, subcategory):
         """Add an item to the variant's item collection"""
+        if not item_name or not isinstance(quantity, (int, float)) or quantity <= 0:
+            return
+            
         item_key = f"{category}|{cuisine}|{subcategory}|{item_name}"
         
         if item_key not in variant_items:
@@ -677,7 +776,8 @@ class ItemPopularityAnalyzer:
         return {
             "items": items_list,
             "total_variants": self.total_variants,
-            "total_unique_items": len(items_list)
+            "total_unique_items": len(items_list),
+            "debug_info": self.debug_info  # Include debug info for troubleshooting
         }
 
 def add_item_popularity_to_response(restaurant_packages_data):
@@ -688,14 +788,19 @@ def add_item_popularity_to_response(restaurant_packages_data):
         restaurant_packages_data: The data returned from fetch_filtered_variants()
         
     Returns:
-        Dictionary with item popularity statistics
+        Dictionary with item popularity statistics and debug info
     """
     if not isinstance(restaurant_packages_data, dict) or 'variants' not in restaurant_packages_data:
-        return {"items": [], "total_variants": 0, "total_unique_items": 0}
+        return {
+            "items": [], 
+            "total_variants": 0, 
+            "total_unique_items": 0,
+            "debug_info": ["No variants data provided"]
+        }
     
     analyzer = ItemPopularityAnalyzer()
-    return analyzer.analyze_variants(restaurant_packages_data['variants'])
-    
+    result = analyzer.analyze_variants(restaurant_packages_data['variants'])
+    return result
     
 def parse_user_requirements(user_requirements_data, count_field="count"):
     """Convert API JSON data to UserRequirement object
@@ -1189,7 +1294,9 @@ def fetch_filtered_variants(filter_data):
     Include maxPerson parameter if provided
     """
     try:
-        url = f"{BACKEND_BASE_URL}{FILTERED_VARIANTS_ENDPOINT}"
+        base_url = BACKEND_BASE_URL.strip().rstrip('/')
+        endpoint = FILTERED_VARIANTS_ENDPOINT.strip().lstrip('/')
+        url = f"{base_url}/{endpoint}"
         
         response = requests.post(url, json=filter_data, timeout=120)  
         
