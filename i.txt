@@ -1,88 +1,3 @@
-from flask import Flask, request, jsonify
-import numpy as np
-from typing import Dict, List, Any, Tuple, Optional
-from collections import defaultdict
-import heapq
-import json
-import requests
-import logging
-from flask_cors import CORS
-from dotenv import load_dotenv
-import os
-import functools
-
-
-def handle_api_error(func):
-    """
-    Decorator for API endpoints to catch and handle all exceptions gracefully
-    """
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except requests.RequestException as e:
-            logger.error(f"API Request Error: {str(e)}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Unable to connect to backend service',
-                'details': str(e) if DEBUG else "Backend service unavailable"
-            }), 503
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON Parsing Error: {str(e)}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid response format from backend service',
-                'details': str(e) if DEBUG else "Data format error"
-            }), 502
-        except ValueError as e:
-            logger.error(f"Value Error: {str(e)}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid input or processing error',
-                'details': str(e) if DEBUG else "Processing error"
-            }), 400
-        except Exception as e:
-            import traceback
-            error_details = str(e)
-            trace = traceback.format_exc()
-            logger.error(f"Unexpected Error: {error_details}")
-            logger.error(f"Traceback: {trace}")
-            
-            return jsonify({
-                'status': 'error',
-                'message': 'An unexpected error occurred',
-                'details': error_details if DEBUG else "Internal server error"
-            }), 500
-    return wrapper
-
-load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
-CORS(app)
-
-
-BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL')
-FILTERED_VARIANTS_ENDPOINT = os.getenv('FILTERED_VARIANTS_ENDPOINT', '/api/v1/traceVenue/variant/filteredVariants')
-USER_REQUIREMENTS_BASE_ENDPOINT = os.getenv('USER_REQUIREMENTS_BASE_ENDPOINT', '/api/v1/traceVenue/jobs')
-PORT = int(os.getenv('PORT', 5001))
-DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-
-# Set logging level based on environment variable
-logging_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
-logger.setLevel(logging_level)
-
-logger.info(f"Starting application with backend URL: {BACKEND_BASE_URL}")
-logger.info(f"Filtered variants endpoint: {FILTERED_VARIANTS_ENDPOINT}")
-logger.info(f"User requirements base endpoint: {USER_REQUIREMENTS_BASE_ENDPOINT}")
-
-
-
 
 class ServiceMatcher:
     def __init__(self):
@@ -1279,16 +1194,18 @@ def fetch_user_requirements(job_id):
         logger.error(f"Error in fetch_user_requirements: {str(e)}")
         return {"data": {}}
     
+
 @app.route('/api/match-restaurants-integrated', methods=['POST'])
 @handle_api_error  
 def match_restaurants_integrated():
     """
     Integrated API endpoint that fetches data from backend APIs 
     and performs matching with updated parser functions
-    Now includes service matching, item popularity analysis, and handles JSON data only with improved error handling
+    Now includes service matching and handles JSON data only with improved error handling
     """
     data = request.json
     
+
     if not isinstance(data, dict):
         return jsonify({
             'status': 'error',
@@ -1337,8 +1254,7 @@ def match_restaurants_integrated():
             'matches': [],
             'total_restaurants': 0,
             'matched_restaurants': 0,
-            'venue_matches': [],
-            'item_popularity': {}
+            'venue_matches': []
         })
    
     user_requirements_data = fetch_user_requirements(job_id)
@@ -1364,9 +1280,6 @@ def match_restaurants_integrated():
     service_matcher = ServiceMatcher()
     
     user_services = service_matcher.extract_user_services(user_requirements_data)
-    
-    # Add item popularity analysis
-    item_popularity = add_item_popularity_to_response(restaurant_packages_data)
     
     matcher = OptimizedRestaurantMatcher(threshold=threshold)
     match_results = matcher.score_restaurants(user_requirements, restaurant_packages)
@@ -1394,17 +1307,17 @@ def match_restaurants_integrated():
                 logger.error(f"Error processing services for variant {variant_id}: {str(e)}")
         
         simplified_result = {
-            'variant_id': result.restaurant_id,  
-            'variant_name': result.restaurant_name,
-            'match_percentage': match_percentage,  
-            'service_match_percentage': service_match_result["match_percentage"],  
-            'price': result.price,
-            'unmet_requirements': result.unmet_requirements,
-            'unmet_services': service_match_result["unmatched_services"],
-            'over_100_categories': result.over_100_categories,  
-            'package_id': result.package_id,
-            'venue_id': venue_id
-        }
+        'variant_id': result.restaurant_id,  
+        'variant_name': result.restaurant_name,
+        'match_percentage': match_percentage,  
+        'service_match_percentage': service_match_result["match_percentage"],  
+        'price': result.price,
+        'unmet_requirements': result.unmet_requirements,
+        'unmet_services': service_match_result["unmatched_services"],
+        'over_100_categories': result.over_100_categories,  # NEW field
+        'package_id': result.package_id,
+        'venue_id': venue_id
+    }
         
         simplified_results.append(simplified_result)
 
@@ -1414,6 +1327,7 @@ def match_restaurants_integrated():
     
             heapq.heappush(venue_heaps[venue_id], (-match_percentage, result.restaurant_id, simplified_result))
     
+    venue_matches = []
     venue_matches = []
     for venue_id, heap in venue_heaps.items():
         if heap:
@@ -1434,16 +1348,7 @@ def match_restaurants_integrated():
         'matches': simplified_results,
         'venue_matches': venue_matches,
         'total_variants': len(restaurant_packages),
-        'matched_variants': len(simplified_results),
-        'item_popularity': item_popularity  # Added item popularity data
+        'matched_variants': len(simplified_results)
     })
-    
-                                
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Simple health check endpoint"""
-    return jsonify({'status': 'healthy'})
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT, debug=False)
  
