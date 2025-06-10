@@ -706,6 +706,193 @@ class OptimizedRestaurantMatcher:
             results.append(match_result)
         
         return results
+    
+
+class ItemPopularityAnalyzer:
+    """
+    Efficiently calculates item popularity across restaurant variants
+    Time Complexity: O(n*m) where n = variants, m = avg items per variant
+    Space Complexity: O(k) where k = unique items
+    """
+    
+    def __init__(self):
+        self.item_stats = {}
+        self.total_variants = 0
+    
+    def analyze_variants(self, variants_data):
+        """
+        Analyze all variants and calculate item popularity
+        
+        Args:
+            variants_data: List of variant dictionaries from API
+            
+        Returns:
+            Dictionary with item statistics and popularity percentages
+        """
+        self.item_stats = {}
+        self.total_variants = len(variants_data)
+        
+        if self.total_variants == 0:
+            return {"items": [], "total_variants": 0}
+        
+        for variant in variants_data:
+            if not isinstance(variant, dict):
+                continue
+                
+            variant_items = self._extract_items_from_variant(variant)
+            
+            for item_key, item_data in variant_items.items():
+                if item_key not in self.item_stats:
+                    self.item_stats[item_key] = {
+                        "count": 0,
+                        "total_quantity": 0,
+                        "item_name": item_data["name"],
+                        "category": item_data["category"],
+                        "cuisine": item_data["cuisine"],
+                        "subcategory": item_data["subcategory"]
+                    }
+                
+                self.item_stats[item_key]["count"] += 1
+                self.item_stats[item_key]["total_quantity"] += item_data["quantity"]
+        
+        return self._prepare_popularity_response()
+    
+    def _extract_items_from_variant(self, variant):
+        """
+        Extract all items from a single variant
+        Handles both availableMenuCount and menuSections formats
+        
+        Returns:
+            Dictionary of items with their details
+        """
+        variant_items = {}
+        
+        available_menu_count = variant.get("availableMenuCount")
+        if available_menu_count:
+            self._process_menu_count_data(available_menu_count, variant_items)
+        
+        menu_sections = variant.get("menuSections", [])
+        if isinstance(menu_sections, list):
+            for section in menu_sections:
+                if isinstance(section, dict):
+                    section_name = section.get("name", "General")
+                    
+                    subcategories_by_cuisine = section.get("subcategoriesByCuisine", {})
+                    for cuisine_name, subcategories in subcategories_by_cuisine.items():
+                        if isinstance(subcategories, list):
+                            for subcat in subcategories:
+                                if isinstance(subcat, dict):
+                                    subcat_name = subcat.get("name", "General")
+                                    counts = subcat.get("availableMenuCount", subcat.get("count", {}))
+                                    
+                                    self._process_item_counts(
+                                        counts, variant_items, 
+                                        section_name, cuisine_name, subcat_name
+                                    )
+                    
+                    section_counts = section.get("availableMenuCount", section.get("count", {}))
+                    if section_counts:
+                        self._process_item_counts(
+                            section_counts, variant_items,
+                            section_name, "General", "General"
+                        )
+        
+        return variant_items
+    
+    def _process_menu_count_data(self, menu_count_data, variant_items, 
+                                category="General", cuisine="General", subcategory="General"):
+        """Process menu count data in various formats"""
+        if isinstance(menu_count_data, dict):
+            self._process_item_counts(menu_count_data, variant_items, category, cuisine, subcategory)
+        elif isinstance(menu_count_data, list):
+            for item in menu_count_data:
+                if isinstance(item, dict):
+                    if "name" in item:
+                        item_name = item.get("name")
+                        count = item.get("count", 0)
+                        if count > 0:
+                            self._add_item_to_stats(
+                                item_name, count, variant_items,
+                                category, cuisine, subcategory
+                            )
+                    else:
+                        self._process_menu_count_data(item, variant_items, category, cuisine, subcategory)
+    
+    def _process_item_counts(self, counts_dict, variant_items, category, cuisine, subcategory):
+        """Process a dictionary of item counts"""
+        if not isinstance(counts_dict, dict):
+            return
+            
+        for item_name, count in counts_dict.items():
+            if isinstance(count, (int, float)) and count > 0:
+                self._add_item_to_stats(
+                    item_name, count, variant_items,
+                    category, cuisine, subcategory
+                )
+    
+    def _add_item_to_stats(self, item_name, quantity, variant_items, category, cuisine, subcategory):
+        """Add an item to the variant's item collection"""
+        item_key = f"{category}|{cuisine}|{subcategory}|{item_name}"
+        
+        if item_key not in variant_items:
+            variant_items[item_key] = {
+                "name": item_name,
+                "category": category,
+                "cuisine": cuisine, 
+                "subcategory": subcategory,
+                "quantity": quantity
+            }
+        else:
+            variant_items[item_key]["quantity"] += quantity
+    
+    def _prepare_popularity_response(self):
+        """
+        Prepare the final response with popularity percentages
+        Sorted by popularity (most common first)
+        """
+        items_list = []
+        
+        for item_key, stats in self.item_stats.items():
+            popularity_percentage = (stats["count"] / self.total_variants) * 100
+            avg_quantity = stats["total_quantity"] / stats["count"] if stats["count"] > 0 else 0
+            
+            items_list.append({
+                "item_id": item_key,
+                "item_name": stats["item_name"],
+                "category": stats["category"],
+                "cuisine": stats["cuisine"],
+                "subcategory": stats["subcategory"],
+                "variants_count": stats["count"],
+                "popularity_percentage": round(popularity_percentage, 2),
+                "total_quantity_across_variants": stats["total_quantity"],
+                "average_quantity_per_variant": round(avg_quantity, 2)
+            })
+        
+        items_list.sort(key=lambda x: x["popularity_percentage"], reverse=True)
+        
+        return {
+            "items": items_list,
+            "total_variants": self.total_variants,
+            "total_unique_items": len(items_list)
+        }
+
+def add_item_popularity_to_response(restaurant_packages_data):
+    """
+    Add item popularity analysis to your existing response
+    
+    Args:
+        restaurant_packages_data: The data returned from fetch_filtered_variants()
+        
+    Returns:
+        Dictionary with item popularity statistics
+    """
+    if not isinstance(restaurant_packages_data, dict) or 'variants' not in restaurant_packages_data:
+        return {"items": [], "total_variants": 0, "total_unique_items": 0}
+    
+    analyzer = ItemPopularityAnalyzer()
+    return analyzer.analyze_variants(restaurant_packages_data['variants'])
+    
+    
 def parse_user_requirements(user_requirements_data, count_field="count"):
     """Convert API JSON data to UserRequirement object
     Handles both menuSections format and availableMenuCount/count format
@@ -1313,7 +1500,6 @@ def match_restaurants_integrated():
     
     restaurant_packages_data = fetch_filtered_variants(filter_data)
     
-    # Check for errors in the API response
     if 'error' in restaurant_packages_data:
         return jsonify({
             'status': 'error',
@@ -1321,7 +1507,6 @@ def match_restaurants_integrated():
             'details': restaurant_packages_data.get('error')
         }), 502
     
-    # Ensure restaurant_packages_data is a dictionary
     if not isinstance(restaurant_packages_data, dict):
         return jsonify({
             'status': 'error',
@@ -1343,7 +1528,6 @@ def match_restaurants_integrated():
    
     user_requirements_data = fetch_user_requirements(job_id)
     
-    # Check for errors in the user requirements API response
     if 'error' in user_requirements_data:
         return jsonify({
             'status': 'error',
@@ -1351,7 +1535,6 @@ def match_restaurants_integrated():
             'details': user_requirements_data.get('error')
         }), 502
     
-    # Ensure user_requirements_data is a dictionary
     if not isinstance(user_requirements_data, dict):
         return jsonify({
             'status': 'error',
@@ -1359,6 +1542,7 @@ def match_restaurants_integrated():
         }), 500
     
     user_requirements = api_to_user_requirements(user_requirements_data, is_user_requirement=True)
+    item_popularity = add_item_popularity_to_response(restaurant_packages_data)
     restaurant_packages = parse_restaurant_packages(adapted_restaurant_data)
     
     service_matcher = ServiceMatcher()
