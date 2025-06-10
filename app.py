@@ -409,22 +409,49 @@ class ItemPopularityAnalyzer:
         
         return variant_items
     
-    def _process_menu_count_data(self, menu_data, variant_items):
-        """
-        Process menu count data structure - handles both dict and list formats
-        """
-        if isinstance(menu_data, list):
-            for section in menu_data:
-                if isinstance(section, dict):
-                    self._process_menu_section(section, variant_items)
-        elif isinstance(menu_data, dict):
-            # Handle direct count dictionary or section with subcategoriesByCuisine
-            if "subcategoriesByCuisine" in menu_data:
-                self._process_menu_section(menu_data, variant_items)
-            else:
-                # Direct count dictionary - treat as general menu items
-                self._process_count_dict(menu_data, variant_items, "Menu Items", "General", "General")
-    
+    def _process_menu_count_data(self, count_data, variant_items):
+        """Process menu count data and extract items"""
+        if isinstance(count_data, dict):
+            # Handle the case where count_data is a dictionary with item types and counts
+            for item_type, count in count_data.items():
+                # Ensure count is a number before comparison
+                try:
+                    count_val = int(count) if count else 0
+                    if count_val > 0:
+                        if item_type not in variant_items:
+                            variant_items[item_type] = 0
+                        variant_items[item_type] += count_val
+                except (ValueError, TypeError):
+                    # Skip invalid count values
+                    logger.warning(f"Invalid count value for item {item_type}: {count}")
+                    continue
+                    
+        elif isinstance(count_data, list):
+            # Handle the case where count_data is a list of items
+            for item_data in count_data:
+                if isinstance(item_data, dict):
+                    item_type = item_data.get("name", "Unknown")
+                    try:
+                        count = int(item_data.get("count", 0))
+                        if count > 0:
+                            if item_type not in variant_items:
+                                variant_items[item_type] = 0
+                            variant_items[item_type] += count
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid count value for item {item_type}")
+                        continue
+        else:
+            # Handle other cases (like direct integer values)
+            try:
+                count_val = int(count_data) if count_data else 0
+                if count_val > 0:
+                    # For direct counts, use a generic item type
+                    item_type = "General"
+                    if item_type not in variant_items:
+                        variant_items[item_type] = 0
+                    variant_items[item_type] += count_val
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid count data: {count_data}")
     def _process_menu_section(self, section, variant_items):
         """
         Process a menu section with subcategoriesByCuisine structure
@@ -758,47 +785,48 @@ class ItemPopularityAnalyzer:
         return self._prepare_popularity_response()
     
     def _extract_items_from_variant(self, variant):
-        """
-        Extract all items from a single variant
-        Handles both availableMenuCount and menuSections formats
-        
-        Returns:
-            Dictionary of items with their details
-        """
+        """Extract all items from a variant with their counts"""
         variant_items = {}
         
+        # Check for availableMenuCount at the top level
         available_menu_count = variant.get("availableMenuCount")
         if available_menu_count:
-            self._process_menu_count_data(available_menu_count, variant_items)
+            if isinstance(available_menu_count, list):
+                # Handle list format - process each menu section
+                for menu_section in available_menu_count:
+                    if isinstance(menu_section, dict):
+                        # Process subcategoriesByCuisine if it exists
+                        subcategories_by_cuisine = menu_section.get("subcategoriesByCuisine", {})
+                        for cuisine_name, subcategory_list in subcategories_by_cuisine.items():
+                            if isinstance(subcategory_list, list):
+                                for subcategory in subcategory_list:
+                                    if isinstance(subcategory, dict):
+                                        count_data = subcategory.get("count", {})
+                                        self._process_menu_count_data(count_data, variant_items)
+                        
+                        # Also check for direct count data in the menu section
+                        if "count" in menu_section:
+                            self._process_menu_count_data(menu_section["count"], variant_items)
+            
+            elif isinstance(available_menu_count, dict):
+                # Handle direct dictionary format
+                self._process_menu_count_data(available_menu_count, variant_items)
         
+        # Check for menuSections structure
         menu_sections = variant.get("menuSections", [])
         if isinstance(menu_sections, list):
             for section in menu_sections:
                 if isinstance(section, dict):
-                    section_name = section.get("name", "General")
-                    
                     subcategories_by_cuisine = section.get("subcategoriesByCuisine", {})
-                    for cuisine_name, subcategories in subcategories_by_cuisine.items():
-                        if isinstance(subcategories, list):
-                            for subcat in subcategories:
-                                if isinstance(subcat, dict):
-                                    subcat_name = subcat.get("name", "General")
-                                    counts = subcat.get("availableMenuCount", subcat.get("count", {}))
-                                    
-                                    self._process_item_counts(
-                                        counts, variant_items, 
-                                        section_name, cuisine_name, subcat_name
-                                    )
-                    
-                    section_counts = section.get("availableMenuCount", section.get("count", {}))
-                    if section_counts:
-                        self._process_item_counts(
-                            section_counts, variant_items,
-                            section_name, "General", "General"
-                        )
+                    for cuisine_name, subcategory_list in subcategories_by_cuisine.items():
+                        if isinstance(subcategory_list, list):
+                            for subcategory in subcategory_list:
+                                if isinstance(subcategory, dict):
+                                    count_data = subcategory.get("count", {})
+                                    self._process_menu_count_data(count_data, variant_items)
         
         return variant_items
-    
+
     def _process_menu_count_data(self, menu_count_data, variant_items, 
                                 category="General", cuisine="General", subcategory="General"):
         """Process menu count data in various formats"""
